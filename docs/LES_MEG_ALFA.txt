@@ -1,0 +1,46 @@
+KillFeed 0.2-alpha  -  automatiske WARDOGS-shorts og daglige recaps, helt av seg selv
+======================================================================================
+
+Hva den gjor
+  Ligger i systemkurven (ved klokka) og ser etter nye opptak hvert minutt. Naar spillet
+  ikke kjorer, leser den kill-feeden (KILL CONFIRMED, VEHICLE DESTROYED, +$...) og lager:
+    Publiser\   ferdige 1080x1920-shorts med multikill eller kjoretoy  + tittel i .txt
+    Andre\      enkeltkills (blir liggende, du kan bruke dem om du vil)
+    Montasje\   "WARDOGS recap <dato>.mp4": kronologisk 16:9-sammendrag (5-10 min) av
+                de vanlige opptakene dine, laget automatisk naar nok er samlet
+  Samme kill fra to opptak (replay + backtrack) blir bare ett klipp.
+  Du faar en Windows-melding naar noe nytt er klart. Ellers er den stille.
+  Ingen konto, ingen innlogging, ingenting sendes noe sted.
+
+Slik kommer du i gang (en gang)
+  1. Dobbeltklikk KillFeed.exe. Windows SmartScreen: "Mer info" -> "Kjor likevel"
+     (alfaen er ikke signert enna). Forste start tar 5-10 s.
+  2. Veiviseren spor om to mapper:
+       - Opptaksmappe: der OBS / Aitum / NVIDIA Instant Replay / Medal legger filene.
+         16:9 (vanlig opptak) og 9:16 (Aitum Vertical) gaar begge fint.
+       - Utmappe: helst en mappe som synkes til telefonen (OneDrive, Google Drive,
+         iCloud Drive, Dropbox). Da dukker klippene opp i YouTube-appen -> + -> velg
+         -> lim inn tittelen fra .txt -> Publiser. Tre trykk.
+  3. Trykk "Start KillFeed". Ferdig. Den starter selv med Windows fra naa av.
+
+Daglig bruk
+  Ingen. Spill. Klippene kommer i utmappa etter okta (den venter til spillet er lukket).
+  Trykk paa ikonet i systemkurven for aa se status, kjore naa, lage recap naa, eller pause.
+
+Tips
+  - 20-35 sekunder er sweet spot for Shorts. Standard er 12 s for / 4 s etter killet.
+  - 1440p-opptak gir skarpere midtutsnitt enn 1080p.
+  - Har du baade backtracks og hele opptak i ulike mapper: legg den andre mappa under
+    "Flere opptaksmapper" i Innstillinger. Recap-en lages bare fra 16:9-opptak.
+  - Ingen klipp? Da fant den ingen kill-tekst. Sjekk at HUD-en er paa og at opptaket
+    er selve spillet (ikke bare skrivebordet). Send tilbakemelding saa ser vi paa det.
+
+Tilbakemelding
+  Knappen "Send tilbakemelding" lager en zip paa skrivebordet med logg og tekst-treff
+  (aldri video). Send den til Kristoffer/ThatsBonkers paa Discord, sammen med:
+  opplosning, opptaksverktoy, klasse (heli/infantry) og om klippene traff riktig.
+
+Kjent i alfaen
+  - Bare WARDOGS. Bare Windows. Klippene har et lite "KillFeed alpha"-merke.
+  - Innstillinger og logg ligger i %APPDATA%\KillFeed. Sletter du den mappa,
+    starter veiviseren paa nytt.

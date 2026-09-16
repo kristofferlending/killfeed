@@ -1,0 +1,29 @@
+# hemmeligheter og tilstand – aldri i git
+client_secret.json
+token.json
+state.json
+processed.json
+config.json
+*.log
+auth.log
+
+# bygg
+build/KillFeed/
+build/tools/
+dist/
+tools/
+*.spec
+__pycache__/
+*.pyc
+
+# media
+*.mp4
+*.mkv
+*.mov
+*.zip
+
+# test-artefakter
+tests/appdata/
+tests/localappdata/
+tests/rec/
+tests/out/
