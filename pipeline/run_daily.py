@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""run_daily.py – nattjobb: klipp alle nye backtracks, last opp klippene som private shorts.
+"""run_daily.py – nightly job on top of the KillFeed core.
 
-  1. Alle *.mkv i config.backtracks_dir som ikke står i processed.json → killclip.py → config.clips_dir
-  2. yt_upload.py → laster opp nye klipp (private), fører state.json
-  3. Logg til run_daily.log
+  1. Clip new recordings with kf_core (same settings + ledger as the tray app). Skipped when the tray app
+     is running – it clips by itself, and two clippers on one ledger is a bad idea.
+  2. yt_upload.py → shorts from <output>\\Publish as Shorts, recaps from <output>\\Recaps as normal videos.
+  3. Cleanup: uploaded clips after N days, fully processed recordings after M days (config.cleanup).
+  4. Log to run_daily.log; a message box only when something failed or the queue is empty.
 
-Kjør manuelt: python run_daily.py [--no-upload] [--limit N]
+Run manually: python run_daily.py [--no-upload] [--no-clip]
 """
 import os, sys, json, glob, subprocess, datetime, argparse, time, re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 cfg = json.load(open(os.path.join(HERE, "config.json"), encoding="utf-8"))
-PROC = os.path.join(HERE, "processed.json")
 LOG = os.path.join(HERE, "run_daily.log")
 
 def log(msg):
@@ -22,90 +23,71 @@ def log(msg):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-upload", action="store_true")
-    ap.add_argument("--limit", type=int, default=cfg.get("max_backtracks_per_run", 60))
+    ap.add_argument("--no-clip", action="store_true")
     A = ap.parse_args()
-    try: proc = json.load(open(PROC, encoding="utf-8"))
-    except Exception: proc = {}
-    os.makedirs(cfg["clips_dir"], exist_ok=True)
-    kc = cfg.get("killclip", {})
-    dirs = [cfg["backtracks_dir"]] + [d for d in cfg.get("extra_source_dirs", []) if d and os.path.isdir(d)]
-    files = []
-    for d in dirs:
-        for ext in ("*.mkv", "*.mp4", "*.mov"):
-            files += glob.glob(os.path.join(d, ext))
-    files = sorted(set(files))
-    files = [f for f in files if os.path.basename(f) not in proc and time.time() - os.path.getmtime(f) > 300]
-    log(f"Steg 1/2: {len(files)} nye opptak/backtracks i {', '.join(dirs)} skal klippes (1-2 min per backtrack, 10-30 min per helt game) -> {cfg['clips_dir']}")
-    for f in files[:A.limit]:
-        args = [sys.executable, os.path.join(HERE, "killclip.py"), f, cfg["clips_dir"]]
-        for k in ("fps", "pre", "post", "gap", "min", "max"):
-            if k in kc: args += [f"--{k}", str(kc[k])]
-        t0 = time.time()
-        r = subprocess.run(args, capture_output=True, text=True)
-        if r.returncode != 0:
-            log(f"FEIL {os.path.basename(f)}: {r.stderr[-400:]}")
-            proc[os.path.basename(f)] = {"error": r.stderr[-200:], "at": datetime.datetime.now().isoformat()}
-        else:
-            try: n = len(json.loads(r.stdout[r.stdout.index("{"):])["segments"])
-            except Exception: n = -1
-            log(f"OK   {os.path.basename(f)}: {n} klipp ({time.time()-t0:.0f} s)" + ("" if n else "  (ingen kill-tekst funnet)"))
-            proc[os.path.basename(f)] = {"clips": n, "at": datetime.datetime.now().isoformat()}
-        json.dump(proc, open(PROC, "w", encoding="utf-8"), indent=1)
+    import kf_bridge as B
+    s = B.settings(); L = B.ledger(); C = B.C
     problems = []
+
+    # ---- step 1: clip ----
+    if A.no_clip:
+        log("Step 1/3: clipping skipped (--no-clip).")
+    elif B.app_running():
+        log("Step 1/3: KillFeed app is running and clips by itself – skipping.")
+    else:
+        log(f"Step 1/3: clipping new recordings in {s['input_dir']} -> {s['output_dir']}")
+        try:
+            r = C.run_once(s, L, B.killclip, log=lambda m: log("  " + m))
+            log(f"  {r['sources']} recording(s) processed: {len(r['publiser'])} to Publish, {len(r['andre'])} to Other, {r['duplicate']} duplicate(s)" + (", new recap" if r.get("montage") else ""))
+        except Exception as e:
+            log(f"  ERROR clipping: {e}"); problems.append(f"Clipping failed: {str(e)[:100]}")
+
+    # ---- step 2: upload ----
     if not A.no_upload:
-        log("Steg 2/2: laster opp nye klipp til YouTube som PRIVATE (beste score forst, maks per kjoring fra config) ...")
+        log("Step 2/3: uploading to YouTube (shorts from Publish, recaps from Recaps) ...")
         pr = subprocess.Popen([sys.executable, "-u", os.path.join(HERE, "yt_upload.py")], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         qualifying = None
         for line in pr.stdout:
             t = line.rstrip()
             log("  " + t)
-            if "FEIL" in t or "ADVARSEL" in t: problems.append(t.strip()[:120])
-            m2 = re.match(r"\s*(\d+) klipp kvalifiserer", t)
+            if "ERROR" in t or "WARNING" in t: problems.append(t.strip()[:120])
+            m2 = re.match(r"\s*(\d+) short\(s\) qualify", t)
             if m2: qualifying = int(m2.group(1))
         pr.wait()
         if pr.returncode != 0: problems.append(f"yt_upload exit {pr.returncode}")
-        if qualifying == 0: problems.append("Koen er tom - ingen multikill/vehicle-klipp igjen. Paa tide aa spille!")
-        log("Opplasting ferdig (exit %d)." % pr.returncode)
+        if qualifying == 0: problems.append("The queue is empty – no multikill/vehicle clips left. Time to play!")
+        log("Upload finished (exit %d)." % pr.returncode)
 
-    # ---- Steg 3/3: rydding - slett det som er ferdig brukt (styres av config.cleanup) ----
-    try:
-        state = json.load(open(os.path.join(HERE, "state.json"), encoding="utf-8"))
-    except Exception:
-        state = {}
-    cl = cfg.get("cleanup", {})
-    now = time.time()
+    # ---- step 3: cleanup ----
+    try: state = json.load(open(os.path.join(HERE, "state.json"), encoding="utf-8"))
+    except Exception: state = {}
+    cl = cfg.get("cleanup", {}); now = time.time()
     def rm(path, why):
-        try:
-            os.remove(path); log(f"Ryddet: {os.path.basename(path)} ({why})")
+        try: os.remove(path); log(f"Cleanup: {os.path.basename(path)} ({why})")
         except Exception: pass
-    done = set(state.get("uploaded", {})) | set(state.get("duplicate", {})) | set(state.get("expired", {}))
     d1 = cl.get("uploaded_clip_days", 7)
-    for f in glob.glob(os.path.join(cfg["clips_dir"], "*.mp4")):
-        base = os.path.basename(f)
-        why = "lastet opp" if base in state.get("uploaded", {}) else ("duplikat/utlopt" if base in done else None)
-        if why and now - os.path.getmtime(f) > d1 * 86400:
-            rm(f, why + f", eldre enn {d1} d")
-            for ext in (".json", ".txt"): rm(os.path.splitext(f)[0] + ext, "sidecar")
-    d2 = cl.get("source_days", 14)
-    try:
-        proc2 = json.load(open(PROC, encoding="utf-8"))
-    except Exception:
-        proc2 = {}
-    src_dirs = [cfg["backtracks_dir"]] + [d for d in cfg.get("extra_source_dirs", []) if d and os.path.isdir(d)]
-    for d in src_dirs:
-        for ext in ("*.mkv", "*.mp4", "*.mov"):
-            for f in glob.glob(os.path.join(d, ext)):
-                if os.path.basename(f) in proc2 and now - os.path.getmtime(f) > d2 * 86400:
-                    rm(f, f"ferdig klippet, eldre enn {d2} d")
+    done = set(state.get("uploaded", {})) | set(state.get("duplicate", {})) | set(state.get("expired", {}))
+    for d in (B.publish_dir(s), B.recaps_dir(s)):
+        for f in glob.glob(os.path.join(d, "*.mp4")):
+            base = os.path.basename(f)
+            why = "uploaded" if base in state.get("uploaded", {}) else ("duplicate/expired" if base in done else None)
+            if why and now - os.path.getmtime(f) > d1 * 86400:
+                rm(f, f"{why}, older than {d1} d")
+                for ext in (".json", ".txt"): rm(os.path.splitext(f)[0] + ext, "sidecar")
+    d2 = cl.get("source_days", 0)
+    if d2:
+        L = B.ledger()
+        for f in C.source_files([s["input_dir"], s.get("vertical_dir") or ""] + list(s.get("extra_input_dirs") or []), skip_dir=s["output_dir"]):
+            if os.path.basename(f) in L["processed"] and now - os.path.getmtime(f) > d2 * 86400:
+                rm(f, f"fully clipped, older than {d2} d")
 
-    # ---- varsling: msgbox bare naar noe er galt eller koen er tom ----
+    # ---- notify: message box only when something is wrong or the queue is empty ----
     if problems and cfg.get("varsling", "msgbox") == "msgbox":
-        msg = "KillFeed nattjobb:\n\n" + "\n".join(problems[:8])
+        msg = "KillFeed nightly job:\n\n" + "\n".join(problems[:8])
         ps = ("Add-Type -AssemblyName System.Windows.Forms;"
-              "[System.Windows.Forms.MessageBox]::Show('%s','KillFeed auto-clips')" % msg.replace("'", "''"))
-        subprocess.Popen(["powershell", "-NoProfile", "-Command", ps],
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        log(f"Varsel vist (msgbox): {len(problems)} punkt(er)")
+              "[System.Windows.Forms.MessageBox]::Show('%s','KillFeed nightly job')" % msg.replace("'", "''"))
+        subprocess.Popen(["powershell", "-NoProfile", "-Command", ps], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        log(f"Message box shown: {len(problems)} item(s)")
 
 if __name__ == "__main__":
     main()

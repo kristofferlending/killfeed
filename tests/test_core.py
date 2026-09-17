@@ -45,8 +45,8 @@ r = C.run_once(s, L, killclip, log=print)
 print("\nRESULTAT:", json.dumps({k: v for k, v in r.items()}, indent=1, ensure_ascii=False))
 print("\nLEDGER clips:")
 for k, v in L["clips"].items(): print(f"  {v['status']:9} {k}  kills={v.get('kills')} veh={v.get('vehicles')} of={v.get('of','')}")
-pub = sorted(os.listdir(os.path.join(T, "out", "Publiser"))); andre = sorted(os.listdir(os.path.join(T, "out", "Andre")))
-mont = sorted(os.listdir(os.path.join(T, "out", "Montasje")))
+pub = sorted(os.listdir(os.path.join(T, "out", "Publish"))); andre = sorted(os.listdir(os.path.join(T, "out", "Other")))
+mont = sorted(os.listdir(os.path.join(T, "out", "Recaps")))
 print("\nPubliser:", pub); print("Andre:", andre); print("Montasje:", mont)
 
 st = [v["status"] for v in L["clips"].values()]
@@ -55,10 +55,10 @@ assert any(v["status"] == "publiser" and v["kills"] >= 2 for v in L["clips"].val
 assert any(v["status"] == "publiser" and v["vehicles"] >= 1 for v in L["clips"].values()), "vehicle skal i Publiser"
 assert any(v["status"] == "andre" for v in L["clips"].values()), "enkeltkill skal i Andre"
 assert len(mont) == 2 and mont[0].endswith(".mp4") and mont[0].startswith("WARDOGS recap 2026-09-12"), mont
-d = killclip.probe(os.path.join(T, "out", "Montasje", mont[0]))
+d = killclip.probe(os.path.join(T, "out", "Recaps", mont[0]))
 print("montasje:", d)
 assert d[1] == 1920 and d[2] == 1080 and 10 < d[0] < 61
-print(open(os.path.join(T, "out", "Montasje", mont[1]), encoding="utf-8").read())
+print(open(os.path.join(T, "out", "Recaps", mont[1]), encoding="utf-8").read())
 # andre runde: ingenting nytt, ingen ny montasje (alt er brukt)
 r2 = C.run_once(s, L, killclip, log=print)
 assert r2["sources"] == 0 and r2["montage"] is None

@@ -7,7 +7,7 @@ uten at han rører noe. Hak av etter hvert. Oppdatert 16.09.2026.
 
 - [x] Kjerne (`kf_core.py`), tray-app, recap, dedup, veiviser
 - [ ] Bygg `dist\KillFeed.exe`, start, gå gjennom veiviseren
-- [ ] Test på 3–5 backtracks + 2 Replay-filer: Publiser/Andre riktig, duplikat fjernet, toast, «Lag recap nå»
+- [ ] Test på 3–5 backtracks + 2 Replay-filer: Publish/Other riktig, duplikat fjernet, toast, «Lag recap nå»
 - [ ] Verifiser 16:9-sonen på infantry (Replay 2026-09-12 10-10-10), juster ROI om nødvendig
 - [ ] CPU-bruk mens spillet kjører = 0 (pausen virker); klipping starter innen 2 min etter spillet lukkes
 - [ ] Autostart: restart PC, ikonet dukker opp uten vindu
@@ -21,6 +21,7 @@ uten at han rører noe. Hak av etter hvert. Oppdatert 16.09.2026.
 - [ ] Engelsk i GUI og LES_MEG
 - [ ] Ordentlig ikon (.ico) på exe og i tray
 - [ ] Auto-oppdatering: versjonssjekk mot GitHub Releases, «Ny versjon» i tray
+- [ ] **Nattjobben over på kf_core:** `run_daily.py` slutter å klippe selv og laster bare opp fra `KillFeed\Publish`; `KillFeed\clips` og egen dedup i `yt_upload.py` fjernes. Gjøres når appens utvalg er verifisert minst like bra som nattjobbens.
 
 ## 3. Lukket alfa (2–3 personer, 1–2 uker)
 
@@ -49,7 +50,6 @@ uten at han rører noe. Hak av etter hvert. Oppdatert 16.09.2026.
 
 - [ ] Beat-synk recap til lisensfri musikk (Pro)
 - [ ] Flere spill – samme motor, nye soner
-- [ ] Flytt nattjobben (`pipeline/`) over på `kf_core`
 - [ ] YouTube-opplasting i appen – krever Google-verifisering, vent til det er etterspurt
 
 ## Konkurransebildet (16.09.2026)

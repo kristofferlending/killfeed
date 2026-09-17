@@ -18,6 +18,20 @@ Sett miljøvariabel TESSERACT hvis den ikke ligger på standardstedet.
 import sys, os, re, subprocess, json, argparse, tempfile, glob, shutil
 from concurrent.futures import ThreadPoolExecutor
 CF = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # ingen konsollvindu-blink på Windows
+_procs = []   # ffmpeg-prosesser som kjører nå (appen dreper dem ved avslutning)
+ABORT = False  # appen setter True for aa avbryte fila som behandles naa (sjekkes mellom ffmpeg-kall og per OCR-bilde)
+class Aborted(Exception): pass
+def _check_abort():
+    if ABORT: raise Aborted("aborted by user")
+def _run_ffmpeg(cmd):
+    _check_abort()
+    p = subprocess.Popen(cmd, creationflags=CF); _procs.append(p)
+    try:
+        rc = p.wait()
+    finally:
+        try: _procs.remove(p)
+        except ValueError: pass
+    if rc != 0: raise subprocess.CalledProcessError(rc, cmd)
 
 def _appdir():
     """Der de innbakte verktøyene ligger: PyInstaller onefile pakker ut til sys._MEIPASS,
@@ -43,6 +57,7 @@ def _find(exe):
     la = os.environ.get("LOCALAPPDATA", "")
     here = _appdir()
     cands = glob.glob(os.path.join(here, "ffmpeg", "**", exe + ".exe"), recursive=True)
+    cands += glob.glob(os.path.join(here, "..", "tools", "ffmpeg", "**", exe + ".exe"), recursive=True)   # repo: tools\ffmpeg (gitignored)
     cands += [os.path.join(la, "Microsoft", "WinGet", "Links", exe + ".exe")]
     cands += glob.glob(os.path.join(la, "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg*", "ffmpeg-*", "bin", exe + ".exe"))
     cands += glob.glob(os.path.join("C:\\", "ffmpeg*", "bin", exe + ".exe")) + glob.glob(os.path.join("C:\\", "Program Files", "ffmpeg*", "bin", exe + ".exe"))
@@ -70,6 +85,7 @@ FEED = re.compile(r"\[\s*(\d{1,4})\s*m\s*\]\s*([A-Za-z0-9'\u2019\-_.]+(?:\s+[A-Z
 PAT = re.compile(r"(KILL\s*CONFIRMED|KILL\s*ASSIST|VEHICLE\s*DESTROYED|VEH[A-Z]*\s*DESTR[A-Z]*|DESTROYED|DELIVERED|HEADSHOT|\bKILL\b|ASSIST|\+\$\s?[\d,]{3,})", re.I)
 
 def ocr(png):
+    if ABORT: return ""
     r = subprocess.run([TESS, png, "-", "--psm", "6"], capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=CF)
     return r.stdout or ""
 
@@ -92,12 +108,13 @@ def detect(path, fps, w=None, h=None):
         cmd = [FFMPEG,"-v","error","-i",path,"-filter_complex",fc]
         for i in range(len(rois)):
             cmd += ["-map",f"[o{i}]","-fps_mode","passthrough",os.path.join(tmp,f"z{i}_%05d.png")]
-        subprocess.run(cmd,check=True,creationflags=CF)
+        _run_ffmpeg(cmd)
         texts = {}
         for i in range(len(rois)):
             frames = sorted(glob.glob(os.path.join(tmp,f"z{i}_*.png")))
             with ThreadPoolExecutor(max(2, os.cpu_count() or 4)) as ex:
                 texts[i] = list(ex.map(ocr, frames))
+            _check_abort()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     n = max(len(v) for v in texts.values()) if texts else 0
@@ -119,20 +136,33 @@ def detect(path, fps, w=None, h=None):
     return hits
 
 def cluster(hits, dur, pre, post, gap, mn, mx):
+    """Group hits into clips. A group that would be longer than mx is split at its widest gap between hits
+    (recursively) so every short is one kill wave with its own lead-in, instead of a fixed slice that may
+    start mid-action or contain no kill at all."""
     if not hits: return []
-    segs=[]; s=hits[0][0]; e=hits[0][0]; kinds=set(hits[0][1])
+    groups=[]; s=hits[0][0]; e=hits[0][0]; kinds=set(hits[0][1]); ts=[hits[0][0]]
     for t,k in hits[1:]:
-        if t-e<=gap: e=t; kinds|=set(k)
-        else: segs.append([s,e,kinds]); s=t; e=t; kinds=set(k)
-    segs.append([s,e,kinds])
+        if t-e<=gap: e=t; kinds|=set(k); ts.append(t)
+        else: groups.append((ts,kinds)); ts=[t]; kinds=set(k); e=t
+    groups.append((ts,kinds))
+    def split(ts):
+        if len(ts)<2 or (ts[-1]-ts[0])+pre+post<=mx: return [ts]
+        gaps=[(ts[i+1]-ts[i],i) for i in range(len(ts)-1)]
+        g,i=max(gaps)
+        if g<3: # kills too dense to split cleanly: cut at mx like before
+            out=[]; a=ts[0]
+            while ts and ts[-1]-a+pre+post>mx:
+                part=[t for t in ts if t-a+pre+post<=mx] or ts[:1]; out.append(part); ts=ts[len(part):]; a=ts[0] if ts else a
+            if ts: out.append(ts)
+            return out
+        return split(ts[:i+1])+split(ts[i+1:])
     out=[]
-    for s,e,k in segs:
-        a=max(0,s-pre); b=min(dur,e+post)
-        if b-a<mn:
-            need=mn-(b-a); a=max(0,a-need/2); b=min(dur,a+mn)
-        while b-a>mx:
-            out.append((round(a,2),round(a+mx,2),sorted(k))); a=a+mx-3
-        out.append((round(a,2),round(b,2),sorted(k)))
+    for ts,k in groups:
+        for part in split(ts):
+            a=max(0,part[0]-pre); b=min(dur,part[-1]+post)
+            if b-a<mn:
+                need=mn-(b-a); a=max(0,a-need/2); b=min(dur,a+mn)
+            out.append((round(a,2),round(b,2),sorted(k)))
     out.sort(); merged=[]
     for a,b,k in out:
         if merged and a<=merged[-1][1] and max(b,merged[-1][1])-merged[-1][0]<=mx:
@@ -159,7 +189,7 @@ def cut(path, a, b, out, w=None, h=None, style="center"):
         cmd += ["-map","0:v:0","-vf",vf]
     cmd += ["-map","0:a:0","-c:v","libx264","-preset","veryfast","-crf","20",
         "-pix_fmt","yuv420p","-c:a","aac","-b:a","192k","-movflags","+faststart",out]
-    subprocess.run(cmd,check=True,creationflags=CF)
+    _run_ffmpeg(cmd)
 
 def summarize(events, hits_in_seg):
     """Teller hendelser og finner største $-beløp for auto-tittel."""
@@ -174,13 +204,17 @@ def summarize(events, hits_in_seg):
             except ValueError: pass
     return kills, assists, veh, money
 
+def clip_score(kills, veh, maxd=0, length=0):
+    """Ranking for the upload queue. From the channel analysis (17.09.2026): length is what decides views –
+    viewers watch ~17-23 s no matter how long the clip is – so every second above 25 costs. Money is OCR noise."""
+    return round(kills * 2 + veh * 3 + (maxd // 100) - max(0.0, (length or 0) - 25) * 0.5, 1)
+
 def auto_title(kills, assists, veh, money, when, maxd=0):
     bits=[]
     if kills: bits.append(f"{kills} kill{'s' if kills>1 else ''}" + (f" ({maxd} m)" if maxd >= 100 else ""))
     if veh: bits.append(f"{veh} vehicle{'s' if veh>1 else ''} destroyed")
     if assists and not kills: bits.append("kill assist")
     t = "WARDOGS" + (" – " + ", ".join(bits) if bits else "")
-    if money: t += f" (+${money:,})"
     return (t + " #shorts")[:100]
 
 def process(inp, outdir, fps=2, pre=12, post=4, gap=12, mn=18, mx=40, style="center", dry=False, log=print):
@@ -208,7 +242,7 @@ def _run(A, log=print):
     base=os.path.splitext(os.path.basename(A.inp))[0]
     when = (re.search(r"(\d{4})-(\d{2})-(\d{2})", base) or [None,"","",""])
     os.makedirs(A.outdir,exist_ok=True)
-    report={"input":A.inp,"duration":dur,"hits":[(t,k) for t,k in hits],
+    report={"input":A.inp,"duration":dur,"width":W,"height":H,"hits":[(t,k) for t,k in hits],
             "feed":[{"t":t,"abs":round(t0abs+t,1),"dist_m":d,"victim":v} for t,d,v in feed],"segments":[]}
     for i,(a,b,k) in enumerate(segs,1):
         name=f"{base}-auto{i:02d}-{a:05.1f}-{b:05.1f}.mp4"
@@ -234,7 +268,7 @@ def _run(A, log=print):
               "events":sorted(set(ev)),"kills":kills,"vehicles":veh,"money":money,
               "abs_start":round(t0abs+a,1),"abs_events":[round(t0abs+t,1) for t in sorted(kt+vt)],"clamped_start":clamped,
               "kill_details":details,"max_dist_m":maxd,
-              "score":kills*3+veh*4+money//1000+maxd//100,
+              "score":clip_score(kills,veh,maxd,b-a),
               "title":auto_title(kills,assists,veh,money,when,maxd)}
         report["segments"].append(side)
         if not A.dry:

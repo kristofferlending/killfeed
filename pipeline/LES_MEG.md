@@ -1,3 +1,18 @@
+# Nightly job (pipeline/) – on top of the KillFeed core (since 0.3)
+
+The nightly job no longer clips by itself. It uses `kf_core` with the same settings and ledger as the tray app:
+
+1. `run_daily.py` clips new recordings via `kf_core.run_once` – **skipped if the KillFeed app is running** (it clips by itself).
+2. `yt_upload.py` uploads shorts from `<output>\Publish` as Shorts and recaps from `<output>\Recaps` as normal videos
+   (`max_recaps_per_run`, `recap_publish_time`, `recap_description` in config.json).
+3. Cleanup per `config.cleanup`.
+
+Deploy: `deploy.cmd` copies `run_daily.py`, `yt_upload.py`, `kf_bridge.py`, `kf_core.py`, `killclip.py` to
+`Videos\Wardogs\KillFeed\schedules\` (config.json, state.json, token/secret files stay). Then `4-installer-nattjobb.cmd` once
+(as administrator) if the scheduled task is not registered yet. `KillFeed\clips` is not used any more – it can be deleted.
+
+---
+
 # WARDOGS auto-clips – oppsett på mini
 
 Pakka ligger i `Videos\Wardogs\auto-clips\`. Flyten hver natt kl. 04:00 (og 20 min etter pålogging):

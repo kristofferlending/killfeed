@@ -11,7 +11,7 @@ Samme motor driver to ting:
 
 | Mappe | Hva | Hvem |
 |---|---|---|
-| `app/` | **KillFeed.exe** – tray-app for venner/kunder (veiviser, overvåking, Publiser/Andre, recap, toast) | alle |
+| `app/` | **KillFeed.exe** – tray-app for venner/kunder (veiviser, overvåking, Publish/Other, recap, toast) | alle |
 | `pipeline/` | **Nattjobben** på Kristoffers PC – klipper, velger, laster opp til YouTube med planlagt publisering | bare ThatsBonkers |
 
 `app/killclip.py` er felles deteksjon og klipping. `app/kf_core.py` er alt som ikke er GUI
@@ -38,13 +38,13 @@ Innstillinger, hovedbok og logg ligger i `%APPDATA%\KillFeed\`.
 ## Teste uten spillet
 
 `tests\test_core.py` lager syntetiske opptak med ekte kill-tekst i sonen, og verifiserer OCR,
-dedup, Publiser/Andre, reserve og recap. Trenger ffmpeg og tesseract på PATH (kjører på Linux).
+dedup, Publish/Other, reserve og recap. Trenger ffmpeg og tesseract på PATH (kjører på Linux).
 
     python tests\test_core.py
 
 ## Nattjobben (pipeline/)
 
-Distribueres til `Videos\Wardogs\auto-clips\` sammen med `app\killclip.py`, `config.json`
+Distribueres til `Videos\Wardogs\KillFeed\schedules\` sammen med `app\killclip.py`, `config.json`
 (fra `config.example.json`), og OAuth-filene som **aldri** skal i git. Cmd-filene 1–7 forklarer
 seg selv øverst. Detaljer: `docs/HANDOFF-killfeed-auto-clips.md`.
 

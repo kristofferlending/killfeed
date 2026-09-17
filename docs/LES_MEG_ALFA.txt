@@ -4,9 +4,9 @@ KillFeed 0.2-alpha  -  automatiske WARDOGS-shorts og daglige recaps, helt av seg
 Hva den gjor
   Ligger i systemkurven (ved klokka) og ser etter nye opptak hvert minutt. Naar spillet
   ikke kjorer, leser den kill-feeden (KILL CONFIRMED, VEHICLE DESTROYED, +$...) og lager:
-    Publiser\   ferdige 1080x1920-shorts med multikill eller kjoretoy  + tittel i .txt
-    Andre\      enkeltkills (blir liggende, du kan bruke dem om du vil)
-    Montasje\   "WARDOGS recap <dato>.mp4": kronologisk 16:9-sammendrag (5-10 min) av
+    Publish\   ferdige 1080x1920-shorts med multikill eller kjoretoy  + tittel i .txt
+    Other\      enkeltkills (blir liggende, du kan bruke dem om du vil)
+    Recaps\   "WARDOGS recap <dato>.mp4": kronologisk 16:9-sammendrag (5-10 min) av
                 de vanlige opptakene dine, laget automatisk naar nok er samlet
   Samme kill fra to opptak (replay + backtrack) blir bare ett klipp.
   Du faar en Windows-melding naar noe nytt er klart. Ellers er den stille.
@@ -15,12 +15,12 @@ Hva den gjor
 Slik kommer du i gang (en gang)
   1. Dobbeltklikk KillFeed.exe. Windows SmartScreen: "Mer info" -> "Kjor likevel"
      (alfaen er ikke signert enna). Forste start tar 5-10 s.
-  2. Veiviseren spor om to mapper:
-       - Opptaksmappe: der OBS / Aitum / NVIDIA Instant Replay / Medal legger filene.
-         16:9 (vanlig opptak) og 9:16 (Aitum Vertical) gaar begge fint.
-       - Utmappe: helst en mappe som synkes til telefonen (OneDrive, Google Drive,
-         iCloud Drive, Dropbox). Da dukker klippene opp i YouTube-appen -> + -> velg
-         -> lim inn tittelen fra .txt -> Publiser. Tre trykk.
+  2. Veiviseren spor om EN mappe: der opptakene dine ligger (OBS / Aitum / NVIDIA
+     Instant Replay / Medal). Undermapper tas med, saa Videos\ holder. 16:9 og 9:16 gaar
+     begge fint. KillFeed lager <mappa>\KillFeed\ selv for det ferdige.
+     Tips: vil du ha klippene rett paa telefonen, sett utmappa til en OneDrive/Google
+     Drive/iCloud-mappe under Innstillinger. Da: YouTube-appen -> + -> velg -> lim inn
+     tittelen fra .txt -> Publiser. Tre trykk.
   3. Trykk "Start KillFeed". Ferdig. Den starter selv med Windows fra naa av.
 
 Daglig bruk

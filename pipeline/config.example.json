@@ -1,6 +1,5 @@
 {
- "backtracks_dir": "C:\\Users\\<deg>\\Videos\\Wardogs\\02-shorts",
- "clips_dir": "C:\\Users\\<deg>\\Videos\\Wardogs\\05-auto-clips",
+ "_readme": "Nightly job on top of the KillFeed core. Clips come from KillFeed's own settings (%APPDATA%\\KillFeed\\settings.json): shorts are uploaded from <output>\\Publish, recaps from <output>\\Recaps. A short is uploaded only if kills >= min_kills OR vehicles >= min_vehicles; best score first, max_per_run per night, scheduled at publish_times (uploaded private with publishAt). Recaps: max_recaps_per_run per night as normal videos, public at recap_publish_time. Dedup against earlier uploads (same kill by clock time). Queue older than queue_max_age_days is retired. Empty queue: best single kill goes through as fallback. cleanup: uploaded clips are deleted after uploaded_clip_days; fully clipped recordings after source_days (0 = never).",
  "title_prefix": "WARDOGS Little Bird",
  "description": "Gaming clips from ThatsBonkers – mostly WARDOGS helicopter flying, plus whatever else I’m playing. Same guy as ThatsBonkers on the WARDOGS Discord. #gaming #shorts #wardogs #thatsbonkers",
  "tags": [
@@ -13,35 +12,24 @@
  ],
  "category_id": "20",
  "privacy": "public",
+ "publish_times": [
+  "06:30",
+  "17:00"
+ ],
  "max_per_run": 6,
- "min_age_seconds": 120,
- "killclip": {
-  "fps": 2,
-  "pre": 12,
-  "post": 4,
-  "gap": 12,
-  "min": 18,
-  "max": 40
- },
- "min_score": 0,
- "_forklaring": "Et klipp lastes opp bare hvis kills >= min_kills ELLER vehicles >= min_vehicles (multikill eller kjoretoy). Enkeltkills blir liggende i 05-auto-clips. Beste score forst (kills*3 + vehicles*4 + $/1000), maks max_per_run per natt. privacy public + publish_times: lastes opp privat med planlagt publisering paa neste ledige tid (17:00/21:00), YouTube gjor dem offentlige selv. Sett privacy til private for aa publisere manuelt fra iPad igjen. Dedup: klipp med samme kill (klokketid fra filnavn, +-dedup_seconds) som et bedre klipp eller noe som alt er lastet opp, hoppes over for alltid (state.json -> duplicate). Hele opptak: legg OBS-opptaksmappa i extra_source_dirs, f.eks. C:\\\\Users\\\\krist\\\\Videos\\\\Wardogs\\\\01-recordings, saa plukker nattjobben kills derfra ogsaa. Varsling: msgbox vises bare naar noe feiler eller koen er tom. Utlop: klipp i ko > queue_max_age_days pensjoneres. Tom ko: beste enkeltkill slippes gjennom som reserve. Laering: vehicle-vekten justeres etter faktiske avspillinger. OBS-opptak i extra_source_dirs plukkes automatisk.",
  "min_kills": 2,
  "min_vehicles": 1,
- "publish_times": [
-  "17:00",
-  "21:00"
- ],
- "extra_source_dirs": [
-  "C:\\Users\\<deg>\\Videos\\Wardogs\\01-raw"
- ],
- "dedup_seconds": 5,
- "varsling": "msgbox",
- "queue_max_age_days": 21,
+ "min_score": 0,
  "fallback_single_when_empty": true,
+ "queue_max_age_days": 21,
  "analytics_tuning": true,
+ "max_recaps_per_run": 1,
+ "recap_publish_time": "19:00",
+ "recap_description": "Daily WARDOGS recap from ThatsBonkers – every kill of the day in order, cut automatically by KillFeed. #wardogs #gaming #thatsbonkers",
+ "varsling": "msgbox",
  "cleanup": {
   "uploaded_clip_days": 7,
-  "source_days": 14,
-  "_forklaring": "Nattjobben sletter klipp som er lastet opp/duplikat/utlopt etter uploaded_clip_days, og backtracks/opptak som er ferdig klippet etter source_days."
- }
+  "source_days": 14
+ },
+ "series_tag": "Road to Havoc"
 }

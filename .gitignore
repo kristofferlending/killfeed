@@ -27,3 +27,8 @@ tests/appdata/
 tests/localappdata/
 tests/rec/
 tests/out/
+
+# bot-hemmeligheter
+bot/secrets.txt
+bot/.env
+bot/*.log

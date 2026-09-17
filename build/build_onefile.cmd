@@ -3,9 +3,9 @@ setlocal
 title KillFeed - bygg en-fils alfa (0.2: tray, autopilot, recap)
 cd /d "%~dp0.."
 rem Kjores fra repoets build\-mappe; jobber fra repo-roten. Kildekode i app\, ffmpeg hentes fra
-rem tools\ffmpeg hvis den finnes (gitignored), ellers fra Kristoffers Wardogs\auto-clips\ffmpeg.
+rem tools\ffmpeg hvis den finnes (gitignored), ellers fra Kristoffers Wardogs\KillFeed\schedules\ffmpeg.
 set FFSRC=tools\ffmpeg
-if not exist "%FFSRC%" set FFSRC=C:\Users\krist\Videos\Wardogs\auto-clips\ffmpeg
+if not exist "%FFSRC%" set FFSRC=C:\Users\krist\Videos\Wardogs\KillFeed\schedules\ffmpeg
 set PY=python
 python --version 1>nul 2>nul || set PY=py -3
 
@@ -30,10 +30,10 @@ for %%f in ("build\tools\tesseract\tessdata\*.traineddata") do (
 echo ==== 3/3 Bygger KillFeed.exe (en fil, tar 2-5 min) ====
 %PY% -m PyInstaller --noconfirm --clean --onefile --windowed --name KillFeed ^
   --add-data "build\tools\ffmpeg;ffmpeg" --add-data "build\tools\tesseract;tesseract" ^
-  --add-data "app\watermark.png;." --add-data "app\killclip.py;." --add-data "app\kf_core.py;." ^
+  --add-data "app\watermark.png;." --add-data "app\killclip.py;." --add-data "app\kf_core.py;." --add-data "app\killfeed.png;." --icon "app\killfeed.ico" ^
   --hidden-import pystray._win32 --hidden-import PIL.Image --hidden-import winotify --paths app app\killfeed_app.py
 if errorlevel 1 (echo FEIL under bygging & pause & exit /b 1)
-copy /y docs\LES_MEG_ALFA.txt dist\LES_MEG.txt >nul
+copy /y docs\README-ALPHA.txt dist\README.txt >nul
 for %%A in (dist\KillFeed.exe) do echo Ferdig: %%~fA (%%~zA byte)
 echo Send dist\KillFeed.exe (+ gjerne LES_MEG.txt). Forste start tar 5-10 s (pakker ut i temp).
 pause
