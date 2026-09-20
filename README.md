@@ -7,7 +7,7 @@ vehicle kill into a ready-to-post 9:16 short with a title, merges the same kill 
 recordings into one clip, and builds a chronological 16:9 recap of the day when enough is collected.
 No account, no upload – the clips land in a folder you sync to your phone and post from there.
 
-**Website:** https://killfeed.no · **Download:** [latest release](https://github.com/kristofferlending/killfeed/releases/latest) · **Discord:** https://discord.gg/YSRt9t7gq
+**Website:** https://killfeed.no · **Download:** [latest release](https://github.com/kristofferlending/killfeed/releases) · **Discord:** https://discord.gg/YSRt9t7gq
 
 Free alpha, Windows 10/11. The exe is not code-signed yet, so SmartScreen warns once (*More info → Run anyway*).
 
