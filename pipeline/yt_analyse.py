@@ -28,7 +28,7 @@ def main():
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
     SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/yt-analytics.readonly"]
-    c = Credentials.from_authorized_user_file(TOKEN, SCOPES)
+    c = Credentials.from_authorized_user_file(TOKEN)
     if c.expired and c.refresh_token: c.refresh(Request()); open(TOKEN, "w").write(c.to_json())
     yt = build("youtube", "v3", credentials=c, cache_discovery=False)
     ch = yt.channels().list(part="contentDetails,statistics,snippet", mine=True).execute()["items"][0]

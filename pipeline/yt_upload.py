@@ -30,20 +30,34 @@ def load(p, default):
     except Exception: return default
 
 def creds(interactive):
+    """token.json is used with the scopes it was actually granted (Google's consent screen lets the user untick
+    some). If the token lacks a scope we need, say which one and how to fix it instead of failing on refresh."""
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
     c = None
     if os.path.exists(TOKEN):
-        c = Credentials.from_authorized_user_file(TOKEN, SCOPES)
+        c = Credentials.from_authorized_user_file(TOKEN)          # scopes = what is stored in the token
+        missing = [x for x in SCOPES[:2] if x not in (c.scopes or [])]  # upload + readonly are required; analytics is optional
+        if missing and not interactive:
+            sys.exit("token.json lacks permission(s): " + ", ".join(m.rsplit("/", 1)[-1] for m in missing) +
+                     "\nRun 3-auth-youtube.cmd again and tick EVERY box on Google's consent screen.")
+        if missing: c = None
     if c and c.expired and c.refresh_token:
-        c.refresh(Request()); open(TOKEN, "w").write(c.to_json())
+        try: c.refresh(Request()); open(TOKEN, "w").write(c.to_json())
+        except Exception as e:
+            if not interactive: sys.exit(f"Could not refresh the YouTube login ({str(e)[:120]}). Run 3-auth-youtube.cmd again.")
+            c = None
     if not c or not c.valid:
         if not interactive:
-            sys.exit("No valid token – run: python yt_upload.py --auth")
+            sys.exit("No valid token – run: 3-auth-youtube.cmd")
         from google_auth_oauthlib.flow import InstalledAppFlow
         flow = InstalledAppFlow.from_client_secrets_file(SECRET, SCOPES)
         c = flow.run_local_server(port=0, prompt="consent")
         open(TOKEN, "w").write(c.to_json())
+        got = c.scopes or []
+        print("Granted: " + ", ".join(x.rsplit("/", 1)[-1] for x in got))
+        lack = [x for x in SCOPES if x not in got]
+        if lack: print("WARNING: not granted: " + ", ".join(x.rsplit("/", 1)[-1] for x in lack) + " – run again and tick every box.")
     return c
 
 def meta_for(path, cfg, L):
@@ -68,14 +82,20 @@ def meta_for(path, cfg, L):
     tags = list(m.get("tags") or cfg.get("tags", [])) + ([series] if series else [])
     return title, desc, tags, m
 
-def next_slots(times, n, start=None):
-    """Neste n publiseringstidspunkter (lokal tid) fra lista times, f.eks. ["17:00","21:00"]. Hopper over tider som er < 1 t fram."""
+def times_for(day, cfg):
+    """Publish times for a given date: config.weekend_publish_times on Sat/Sun (if set), else publish_times."""
+    if day.weekday() >= 5 and cfg.get("weekend_publish_times"): return cfg["weekend_publish_times"]
+    return cfg.get("publish_times") or []
+
+def next_slots(times, n, start=None, cfg=None):
+    """Next n publish times (local) after start, skipping anything < 1 h ahead. Weekends can have their own list."""
     now = start or datetime.datetime.now().astimezone()
     out, day = [], 0
     while len(out) < n and day < 60:
-        for t in sorted(times):
+        d = now + datetime.timedelta(days=day)
+        for t in sorted(times_for(d, cfg) if cfg else times):
             hh, mm = map(int, t.split(":"))
-            cand = (now + datetime.timedelta(days=day)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+            cand = d.replace(hour=hh, minute=mm, second=0, microsecond=0)
             if cand > now + datetime.timedelta(hours=1):
                 out.append(cand)
                 if len(out) == n: break
@@ -204,6 +224,10 @@ def main():
             files = [best]
     json.dump(state, open(STATE, "w", encoding="utf-8"), indent=1)
     limit = A.max if A.max is not None else cfg.get("max_per_run", 10)
+    # weekend: fill Saturday/Sunday slots. On Fri-Sun, upload as many as needed to cover the weekend list.
+    wk = cfg.get("weekend_publish_times")
+    if A.max is None and wk and datetime.date.today().weekday() in (4, 5, 6):
+        limit = max(limit, len(wk))
     # ---- laering: hent avspillinger for tidligere opplastinger og juster vehicle-vekten ----
     if yt is not None and cfg.get("analytics_tuning", True):
         try:
@@ -241,7 +265,7 @@ def main():
     if state.get("last_publish_at"):
         try: start = max(datetime.datetime.fromisoformat(state["last_publish_at"]), datetime.datetime.now().astimezone())
         except Exception: start = None
-    slots = next_slots(times, limit, start) if (privacy == "public" and times) else []
+    slots = next_slots(times, limit, start, cfg) if (privacy == "public" and times) else []
     print(f"{len(files)} short(s) qualify (>= {min_kills} kills or >= {min_vehicles} vehicles, score >= {min_score}); {len(skipped)} single kills stay local. Uploading up to {limit}, best first.")
     print(f"Visibility: {privacy}" + (f", scheduled at {', '.join(times)}" if slots else ""))
     for i, f in enumerate(files[:limit]):

@@ -27,6 +27,8 @@ ffmpeg-essentials (gyan.dev) pakket ut i `tools\ffmpeg\` (gitignored; eller i `.
 
 Gir `dist\KillFeed.exe` (~130 MB, bundler ffmpeg + Tesseract + vannmerke). Første start 5–10 s.
 
+Utgivelser: https://github.com/kristofferlending/killfeed/releases – exe + `docs/RELEASE-<versjon>.md` som release-notat.
+
 ## Kjøre fra kildekode
 
     pip install pystray pillow winotify

@@ -6,9 +6,9 @@ uten at han rører noe. Hak av etter hvert. Oppdatert 16.09.2026.
 ## 1. Få alfaen til å virke hos Kristoffer
 
 - [x] Kjerne (`kf_core.py`), tray-app, recap, dedup, veiviser
-- [ ] Bygg `dist\KillFeed.exe`, start, gå gjennom veiviseren
+- [x] Bygg `dist\KillFeed.exe`, start, gå gjennom veiviseren
 - [ ] Test på 3–5 backtracks + 2 Replay-filer: Publish/Other riktig, duplikat fjernet, toast, «Lag recap nå»
-- [ ] Verifiser 16:9-sonen på infantry (Replay 2026-09-12 10-10-10), juster ROI om nødvendig
+- [x] Verifisert 16:9-sonen på infantry (Replay 2026-09-12 10-10-10) – kills, vehicle og avstand treffer
 - [ ] CPU-bruk mens spillet kjører = 0 (pausen virker); klipping starter innen 2 min etter spillet lukkes
 - [ ] Autostart: restart PC, ikonet dukker opp uten vindu
 
@@ -17,9 +17,9 @@ uten at han rører noe. Hak av etter hvert. Oppdatert 16.09.2026.
 - [ ] Feilmeldinger som sier hva brukeren skal gjøre – aldri traceback
 - [ ] Første-kjøring-sjekk: ffmpeg/Tesseract, skriverett, diskplass > 5 GB
 - [ ] Synkmappe-låsing (OneDrive/iCloud): skriv til temp, flytt inn – test mot ekte OneDrive
-- [ ] Logg-rotasjon (maks 5 MB), rydd `work\` ved oppstart
-- [ ] Engelsk i GUI og LES_MEG
-- [ ] Ordentlig ikon (.ico) på exe og i tray
+- [x] Logg-rotasjon (maks 5 MB), rydd `work\` ved oppstart
+- [x] Engelsk i GUI og README (0.3)
+- [x] Ordentlig ikon (.ico) på exe og i tray, tilstand i tray-ikonet
 - [ ] Auto-oppdatering: versjonssjekk mot GitHub Releases, «Ny versjon» i tray
 - [ ] **Nattjobben over på kf_core:** `run_daily.py` slutter å klippe selv og laster bare opp fra `KillFeed\Publish`; `KillFeed\clips` og egen dedup i `yt_upload.py` fjernes. Gjøres når appens utvalg er verifisert minst like bra som nattjobbens.
 
@@ -48,9 +48,18 @@ uten at han rører noe. Hak av etter hvert. Oppdatert 16.09.2026.
 
 ## 6. Etterpå, når det selger
 
+- [ ] Våpen/klasse fra kill-feed-ikonet (bildegjenkjenning) → søk på heli/våpen i klipplista
+
 - [ ] Beat-synk recap til lisensfri musikk (Pro)
 - [ ] Flere spill – samme motor, nye soner
 - [ ] YouTube-opplasting i appen – krever Google-verifisering, vent til det er etterspurt
+
+## Lærdom fra kanalanalysen (17.09.2026)
+
+Seerne ser 17–23 s uansett klipplengde. ≤25 s: median 788 visninger / 82 % seertid; 46 s+: median 60 / 48 %.
+Antall kills betyr nesten ingenting; vehicle er et lite pluss. Derfor: shorts 15–30 s (8 s før / 3 s etter),
+lange kill-sekvenser deles ved største pause, score straffer sekunder over 25, penger ut av tittel og score.
+Publisering hverdager 06:30/17:00, helg 09/12/16/20. Serie-krok «Road to Havoc» på alt.
 
 ## Konkurransebildet (16.09.2026)
 
