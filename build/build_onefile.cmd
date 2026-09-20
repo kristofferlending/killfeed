@@ -3,9 +3,9 @@ setlocal
 title KillFeed - bygg en-fils alfa (0.2: tray, autopilot, recap)
 cd /d "%~dp0.."
 rem Kjores fra repoets build\-mappe; jobber fra repo-roten. Kildekode i app\, ffmpeg hentes fra
-rem tools\ffmpeg hvis den finnes (gitignored), ellers fra Kristoffers Wardogs\KillFeed\schedules\ffmpeg.
+rem tools\ffmpeg hvis den finnes (gitignored), ellers fra Videos\Wardogs\KillFeed\schedules\ffmpeg.
 set FFSRC=tools\ffmpeg
-if not exist "%FFSRC%" set FFSRC=C:\Users\krist\Videos\Wardogs\KillFeed\schedules\ffmpeg
+if not exist "%FFSRC%" set FFSRC=%USERPROFILE%\Videos\Wardogs\KillFeed\schedules\ffmpeg
 set PY=python
 python --version 1>nul 2>nul || set PY=py -3
 
@@ -35,5 +35,5 @@ echo ==== 3/3 Bygger KillFeed.exe (en fil, tar 2-5 min) ====
 if errorlevel 1 (echo FEIL under bygging & pause & exit /b 1)
 copy /y docs\README-ALPHA.txt dist\README.txt >nul
 for %%A in (dist\KillFeed.exe) do echo Ferdig: %%~fA (%%~zA byte)
-echo Send dist\KillFeed.exe (+ gjerne LES_MEG.txt). Forste start tar 5-10 s (pakker ut i temp).
+echo Send dist\KillFeed.exe (+ docs\README-ALPHA.txt). Forste start tar 5-10 s (pakker ut i temp).
 pause

@@ -9,11 +9,11 @@ set OUT=frames
 if not exist "%OUT%" mkdir "%OUT%"
 set FF=
 for /f "delims=" %%f in ('dir /s /b "..\tools\ffmpeg\ffmpeg.exe" 2^>nul') do set FF=%%f
-if "%FF%"=="" for /f "delims=" %%f in ('dir /s /b "C:\Users\krist\Videos\Wardogs\KillFeed\schedules\ffmpeg\ffmpeg.exe" 2^>nul') do set FF=%%f
+if "%FF%"=="" for /f "delims=" %%f in ('dir /s /b "%USERPROFILE%\Videos\Wardogs\KillFeed\schedules\ffmpeg\ffmpeg.exe" 2^>nul') do set FF=%%f
 if "%FF%"=="" (echo FEIL: fant ikke ffmpeg.exe & pause & exit /b 1)
 
-set R=C:\Users\krist\Videos\Wardogs\full-format\Replay WARDOGS 2026-09-12 10-10-10.mkv
-set B=C:\Users\krist\Videos\Wardogs\short-format\Backtrack WARDOGS 2026-09-12 10-10-10.mkv
+set R=%USERPROFILE%\Videos\Wardogs\full-format\Replay.mkv
+set B=%USERPROFILE%\Videos\Wardogs\short-format\Backtrack.mkv
 rem Kill 1 ca 59 s, kill 2 ca 111.5 s (fra OCR paa backtracken). Tar bilder litt for og etter.
 for %%t in (57 58 59 60 61 62 110 111 112 113 114) do (
   echo Replay    %%t s

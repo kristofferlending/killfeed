@@ -1,57 +1,68 @@
 # KillFeed
 
-Automatiske WARDOGS-shorts og daglige recaps – helt av seg selv.
+Automatic WARDOGS shorts and daily recaps – on your own PC, by themselves.
 
-KillFeed leser kill-feeden i opptakene dine (OCR på fast plass under siktet), klipper 18–40 s
-shorts i 9:16 med tittel, deduper samme kill fra flere opptak, og bygger en kronologisk recap
-(5–10 min, 16:9) når nok er samlet. Ingen konto, ingen opplasting – klippene havner i en mappe
-du synker til telefonen og publiserer derfra.
+KillFeed reads the kill feed in your recordings (OCR on the HUD text), cuts every multikill and
+vehicle kill into a ready-to-post 9:16 short with a title, merges the same kill from several
+recordings into one clip, and builds a chronological 16:9 recap of the day when enough is collected.
+No account, no upload – the clips land in a folder you sync to your phone and post from there.
 
-Samme motor driver to ting:
+**Website:** https://killfeed.no · **Download:** [latest release](https://github.com/kristofferlending/killfeed/releases/latest) · **Discord:** https://discord.gg/YSRt9t7gq
 
-| Mappe | Hva | Hvem |
-|---|---|---|
-| `app/` | **KillFeed.exe** – tray-app for venner/kunder (veiviser, overvåking, Publish/Other, recap, toast) | alle |
-| `pipeline/` | **Nattjobben** på Kristoffers PC – klipper, velger, laster opp til YouTube med planlagt publisering | bare ThatsBonkers |
+Free alpha, Windows 10/11. The exe is not code-signed yet, so SmartScreen warns once (*More info → Run anyway*).
 
-`app/killclip.py` er felles deteksjon og klipping. `app/kf_core.py` er alt som ikke er GUI
-(innstillinger, hovedbok, dedup, utvalg, montasje). `pipeline/` bruker i dag sin egen kopi av
-logikken i `yt_upload.py`; planen er å flytte den over på `kf_core` (se `docs/ROADMAP.md`).
+## Layout
 
-## Bygge exe-en
+| Folder | What |
+|---|---|
+| `app/` | **KillFeed.exe** – the tray app (setup wizard, watching, Publish/Other, recap, notifications) |
+| `app/killclip.py` | Kill-feed detection and clipping (shared) |
+| `app/kf_core.py` | Everything that is not GUI: settings, ledger, dedup, selection, recap |
+| `pipeline/` | Optional nightly job that clips with `kf_core` and uploads to YouTube with scheduled publishing – used for the [ThatsBonkers](https://www.youtube.com/@ThatsBonkers) channel |
+| `bot/` | Discord bot + MCP server for the KillFeed server (needs its own `bot/secrets.txt`, never committed) |
+| `site/` | killfeed.no (static, deployed by Vercel on push) |
+| `docs/` | Release notes, roadmap, recording guide |
+| `tests/` | Synthetic-recording tests for OCR, dedup, Publish/Other and recap |
 
-Windows med Python 3.12, Tesseract (UB-Mannheim) i `C:\Program Files\Tesseract-OCR` og
-ffmpeg-essentials (gyan.dev) pakket ut i `tools\ffmpeg\` (gitignored; eller i `..\auto-clips\ffmpeg`).
+## Run from source
+
+Windows, Python 3.12, Tesseract (UB-Mannheim build) in `C:\Program Files\Tesseract-OCR`, and
+ffmpeg essentials (gyan.dev) unpacked in `tools\ffmpeg\` (gitignored).
+
+    dev-run.cmd                          # installs pystray/pillow/winotify, starts GUI + tray
+    python app\killfeed_app.py --run     # one pass without GUI (debugging)
+
+Settings, ledger and log live in `%APPDATA%\KillFeed\`. Delete that folder to run the setup again.
+
+## Build the exe
 
     build\build_onefile.cmd
 
-Gir `dist\KillFeed.exe` (~130 MB, bundler ffmpeg + Tesseract + vannmerke). Første start 5–10 s.
+Produces `dist\KillFeed.exe` (~130 MB – ffmpeg, Tesseract and the watermark are bundled).
+Releases are the exe plus `docs/RELEASE-<version>.md` as release notes.
 
-Utgivelser: https://github.com/kristofferlending/killfeed/releases – exe + `docs/RELEASE-<versjon>.md` som release-notat.
+## Tests
 
-## Kjøre fra kildekode
-
-    pip install pystray pillow winotify
-    python app\killfeed_app.py            # GUI + tray
-    python app\killfeed_app.py --run      # én runde uten GUI (feilsøking)
-
-Innstillinger, hovedbok og logg ligger i `%APPDATA%\KillFeed\`.
-
-## Teste uten spillet
-
-`tests\test_core.py` lager syntetiske opptak med ekte kill-tekst i sonen, og verifiserer OCR,
-dedup, Publish/Other, reserve og recap. Trenger ffmpeg og tesseract på PATH (kjører på Linux).
+`tests\test_core.py` generates synthetic recordings with real kill-feed text in the zone and checks
+OCR, dedup, Publish/Other, reserve and recap. Needs ffmpeg and tesseract on PATH (runs on Linux too).
 
     python tests\test_core.py
 
-## Nattjobben (pipeline/)
+## Nightly job (pipeline/)
 
-Distribueres til `Videos\Wardogs\KillFeed\schedules\` sammen med `app\killclip.py`, `config.json`
-(fra `config.example.json`), og OAuth-filene som **aldri** skal i git. Cmd-filene 1–7 forklarer
-seg selv øverst. Detaljer: `docs/HANDOFF-killfeed-auto-clips.md`.
+Not needed to use KillFeed. It runs on top of `kf_core` with the same settings and ledger as the app,
+skips clipping while the app is running, uploads shorts from `Publish\` and recaps from `Recaps\`
+with scheduled publish times, and cleans up. Copy `config.example.json` to `config.json`, put your
+own Google OAuth `client_secret.json` next to it (never committed), run `3-auth-youtube.cmd` once,
+then `4-installer-nattjobb.cmd` to register the scheduled task. `deploy.cmd` copies the current
+files from the repo to the schedules folder.
 
-## Beslutninger
+## Feedback
 
-Alle valg (og hvorfor) ligger i beslutningsloggen (Supabase `claude-memory`, prosjekt `killfeed`).
-Kortversjon: multikill ELLER vehicle for shorts, dedup på klokketid, planlagt publisering 17/21,
-opplasting holdes utenfor exe-en, salg via merchant of record – ikke leq.no-butikken.
+Press *Send feedback* in the app – it puts a zip with the log and text hits (never video) on your
+desktop. Drop it in #feedback on Discord with your resolution, recording tool and class.
+
+## License
+
+Source-available. You may read, build and modify KillFeed for your own use. Redistribution, resale or
+offering it as a service is not permitted – see [LICENSE.md](LICENSE.md). © 2026 Lending Equipment.

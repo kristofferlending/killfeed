@@ -44,5 +44,5 @@ echo.
 echo ==== Innhold i KillFeed\clips ====
 dir /b "..\clips"
 echo.
-echo Ser du "kills": 1 over og en .mp4 i lista, virker alt. Neste steg: OAuth (se LES_MEG.md), saa 3-auth-youtube.cmd
+echo Ser du "kills": 1 over og en .mp4 i lista, virker alt. Neste steg: OAuth (se README.md), saa 3-auth-youtube.cmd
 pause
