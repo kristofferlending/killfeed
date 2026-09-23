@@ -1,4 +1,4 @@
-KillFeed 0.3-alpha  -  automatic WARDOGS shorts and daily recaps, all by itself
+KillFeed 0.3.1-alpha -  automatic WARDOGS shorts and daily recaps, all by itself
 ================================================================================
 
 What it does
@@ -27,7 +27,7 @@ Daily use
   The X button hides the window - KillFeed keeps running in the tray. "Quit KillFeed" stops it.
 
 Tips
-  - 20-35 seconds is the sweet spot for Shorts. Default is 12 s before / 4 s after the kill.
+  - 20-35 seconds is the sweet spot for Shorts. Default is 8 s before / 3 s after the kill.
   - 1440p recordings give a sharper centre crop than 1080p.
   - Recording backtracks and full sessions in different folders: add the second one under
     Settings -> Extra folders. Recaps are only built from 16:9 recordings.

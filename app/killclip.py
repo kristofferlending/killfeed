@@ -82,7 +82,39 @@ def rois_for(w, h):
 def roi_for(w, h): return rois_for(w, h)[0]
 PRE = "scale=2100:-1,format=gray,lutyuv=y='if(gt(val,170),255,0)'"
 FEED = re.compile(r"\[\s*(\d{1,4})\s*m\s*\]\s*([A-Za-z0-9'\u2019\-_.]+(?:\s+[A-Za-z0-9'\u2019\-_.]+)*)")
-PAT = re.compile(r"(KILL\s*CONFIRMED|KILL\s*ASSIST|VEHICLE\s*DESTROYED|VEH[A-Z]*\s*DESTR[A-Z]*|DESTROYED|DELIVERED|HEADSHOT|\bKILL\b|ASSIST|\+\$\s?[\d,]{3,})", re.I)
+# Only the personal banner under the crosshair may create an event. The money HUD and the kill feed on the
+# left show everyone's kills and are cropped away in the 9:16 short, so text there is enrichment, never proof:
+# before 0.3.1 a stranger's row in the left feed produced a "kill" the viewer could not see (clip DQkBYvQGW4E).
+BANNER = re.compile(r"(KILL\s*C[O0]NF[I1L|]RM[A-Z]*|KILL\s*ASS[I1|]ST|VEH[I1|][A-Z]*\s*DESTR[A-Z]*|HEADSH[O0]T)", re.I)
+MONEY = re.compile(r"\+\s?\$\s?([\d,]{3,})")
+MIN_FRAMES = 2      # a banner stays up for seconds; a single OCR frame is noise
+HOLD_S = 1.5        # ... and those frames must be this close together
+
+def _norm(tok):
+    t = re.sub(r"[^A-Z]", "", tok.upper())
+    if t.startswith("KILLC"): return "KILLCONFIRMED"
+    if t.startswith("KILLASS"): return "KILLASSIST"
+    if t.startswith("VEH"): return "VEHICLEDESTROYED"
+    if t.startswith("HEADSH"): return "HEADSHOT"
+    return t
+
+def _persist(raw):
+    """Keep a kind only where it was read in >= MIN_FRAMES frames no more than HOLD_S apart."""
+    by = {}
+    for t, kinds in raw:
+        for k in kinds: by.setdefault(k, []).append(t)
+    keep = set()
+    for k, ts in by.items():
+        run = [ts[0]]
+        for t in ts[1:]:
+            if t - run[-1] <= HOLD_S: run.append(t)
+            else:
+                if len(run) >= MIN_FRAMES: keep |= {(x, k) for x in run}
+                run = [t]
+        if len(run) >= MIN_FRAMES: keep |= {(x, k) for x in run}
+    out = {}
+    for t, k in keep: out.setdefault(t, set()).add(k)
+    return [(t, sorted(out[t])) for t in sorted(out)]
 
 def ocr(png):
     if ABORT: return ""
@@ -118,22 +150,27 @@ def detect(path, fps, w=None, h=None):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     n = max(len(v) for v in texts.values()) if texts else 0
-    hits = []; feed = []
+    raw = []; feed = []; money = []
     for f in range(n):
-        m = []
-        for i in texts:
-            if f < len(texts[i]): m += PAT.findall(texts[i][f])
+        t = f / fps
+        # zone 0 = the personal banner under the crosshair. It alone decides whether something happened.
+        kinds = {_norm(x) for x in BANNER.findall(texts[0][f])} if 0 in texts and f < len(texts[0]) else set()
+        # zone 1 = money HUD (top right): the amount only, never an event
+        if 1 in texts and f < len(texts[1]):
+            for a in MONEY.findall(texts[1][f]):
+                try: money.append((t, int(a.replace(",", ""))))
+                except ValueError: pass
+        # zone 2 = the kill feed on the left (16:9 only): distance and victim, never an event - it lists
+        # every player's kills, and it is outside the 9:16 crop, so the viewer never sees it
         if 2 in texts and f < len(texts[2]):
             for d, v in FEED.findall(texts[2][f]):
                 v = v.strip(" .,:;-_")
-                if v and not any(x[2] == v and x[1] == int(d) and f/fps - x[0] < 15 for x in feed[-3:]):   # raden staar ~10 s
-                    feed.append((f/fps, int(d), v))
-        m = [x.upper().replace(" ","") for x in m]
-        m = [("KILLCONFIRMED" if x == "KILL" else x) for x in m]   # HUD-feeden skriver bare KILL
-        if any(not x.startswith("+$") for x in m):   # penger alene (sone-tick, tips) teller ikke som hendelse
-            hits.append((f/fps, sorted(set(m))))
-    detect.feed = feed   # (t, avstand_m, offer) fra kill-feeden - bare 16:9 har sonen
-    return hits
+                if v and not any(x[2] == v and x[1] == int(d) and t - x[0] < 15 for x in feed[-3:]):   # raden staar ~10 s
+                    feed.append((t, int(d), v))
+        if kinds: raw.append((t, kinds))
+    detect.feed = feed     # (t, avstand_m, offer) - bare 16:9 har sonen
+    detect.money = money   # (t, belop)
+    return _persist(raw)
 
 def cluster(hits, dur, pre, post, gap, mn, mx):
     """Group hits into clips. A group that would be longer than mx is split at its widest gap between hits
@@ -192,17 +229,11 @@ def cut(path, a, b, out, w=None, h=None, style="center"):
     _run_ffmpeg(cmd)
 
 def summarize(events, hits_in_seg):
-    """Teller hendelser og finner største $-beløp for auto-tittel."""
+    """Teller hendelser fra banneret. Penger kommer fra penge-sonen, ikke herfra."""
     kills = sum(1 for e in events if e.startswith("KILLCONFIRMED"))
     assists = sum(1 for e in events if "ASSIST" in e)
     veh = sum(1 for e in events if "DESTROYED" in e)
-    money = 0
-    for e in events:
-        m = re.match(r"\+\$([\d,]+)", e)
-        if m:
-            try: money = max(money, int(m.group(1).replace(",","").rstrip(",") or 0))
-            except ValueError: pass
-    return kills, assists, veh, money
+    return kills, assists, veh, 0
 
 def clip_score(kills, veh, maxd=0, length=0):
     """Ranking for the upload queue. From the channel analysis (17.09.2026): length is what decides views –
@@ -237,6 +268,7 @@ def file_start_epoch(path, dur):
 def _run(A, log=print):
     dur,W,H=probe(A.inp); hits=detect(A.inp,A.fps,W,H)
     feed=getattr(detect,"feed",[]) or []
+    cash=getattr(detect,"money",[]) or []
     t0abs=file_start_epoch(A.inp,dur)
     segs=cluster(hits,dur,A.pre,A.post,A.gap,A.min,A.max)
     base=os.path.splitext(os.path.basename(A.inp))[0]
@@ -250,7 +282,8 @@ def _run(A, log=print):
         ev=[]
         for t,kk in hits:
             if a<=t<=b: ev+=kk
-        kills,assists,veh,money=summarize(sorted(set(ev)),None)
+        kills,assists,veh,_=summarize(sorted(set(ev)),None)
+        money=max((c for t,c in cash if a<=t<=b), default=0)
         def waves(pred):
             ts=[t for t,kk in hits if a<=t<=b and any(pred(x) for x in kk)]
             n=0; last=-99; starts=[]
@@ -262,7 +295,10 @@ def _run(A, log=print):
         clamped=a<=0.05 and first_hit<A.pre*0.75   # ville hatt pre-roll, men fila starter midt i action - selve killet kan mangle
         kills,kt=waves(lambda x: x.startswith("KILLCONFIRMED"))
         veh,vt=waves(lambda x: "DESTROYED" in x)
-        details=[{"t":t,"abs":round(t0abs+t,1),"dist_m":d,"victim":v} for t,d,v in feed if a-3<=t<=b+3]
+        # a feed row is only ours when the banner fired at about the same moment - the feed lists everyone
+        ktimes=[t for t,kk in hits if a<=t<=b and any(x.startswith(("KILLCONFIRMED","VEHICLE")) for x in kk)]
+        details=[{"t":t,"abs":round(t0abs+t,1),"dist_m":d,"victim":v} for t,d,v in feed
+                 if a-3<=t<=b+3 and any(abs(t-k)<=2.5 for k in ktimes)]
         maxd=max((x["dist_m"] for x in details),default=0)
         side={"file":name,"source":os.path.basename(A.inp),"source_res":f"{W}x{H}","start":a,"end":b,"len":round(b-a,1),
               "events":sorted(set(ev)),"kills":kills,"vehicles":veh,"money":money,

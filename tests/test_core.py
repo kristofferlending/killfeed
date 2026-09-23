@@ -12,11 +12,17 @@ FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 W, H = 1920, 1080
 x, y = int(W * 0.39) + 20, int(H * 0.71) + 20     # inne i sone 1 (16:9)
 
+BANNER_XY = (x, y)                                       # sone 1: banneret under siktet (vaart eget)
+MONEY_XY = (int(W * 0.80) + 10, int(H * 0.02) + 10)      # sone 2: penge-HUD oppe til hoyre
+FEED_XY = (10, int(H * 0.43) + 20)                       # sone 3: kill-feeden til venstre (alle spillere)
+
 def make(name, dur, events):
-    """events: liste av (t_start, t_end, tekst). Skriver hvit tekst på mørk bakgrunn i kill-feed-sonen."""
+    """events: (t_start, t_end, tekst) eller (t_start, t_end, tekst, (x, y)). Hvit tekst paa moerk bakgrunn."""
     vf = "drawbox=x=0:y=0:w=iw:h=ih:color=0x202020:t=fill"
-    for a, b, txt in events:
-        vf += f",drawtext=fontfile={FONT}:text='{txt}':fontcolor=white:fontsize=34:x={x}:y={y}:enable='between(t,{a},{b})'"
+    for e in events:
+        a, b, txt = e[0], e[1], e[2]
+        px, py = e[3] if len(e) > 3 else BANNER_XY
+        vf += f",drawtext=fontfile={FONT}:text='{txt}':fontcolor=white:fontsize=34:x={px}:y={py}:enable='between(t,{a},{b})'"
     out = os.path.join(T, "rec", name)
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc2=size={W}x{H}:rate=30", "-f", "lavfi", "-i", "sine=frequency=440",
                     "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-c:a", "aac", "-shortest", out], check=True)
@@ -29,6 +35,10 @@ make("2026-09-12 10-00-00.mkv", 90, [(20, 22.5, "KILL CONFIRMED  +$300"), (60, 6
 make("Replay WARDOGS 2026-09-12 10-01-20.mkv", 40, [(20, 22.5, "KILL CONFIRMED  +$300"), (26, 28.5, "KILL CONFIRMED  +$650")])
 # Opptak C: annen dag, bare vehicle
 make("2026-09-13 20-00-00.mkv", 60, [(30, 33, "VEHICLE DESTROYED  +$1,200")])
+# Opptak D: ingen egne kills. Teksten staar BARE i venstre kill-feed (andre spilleres drap) og i penge-HUD-en
+# oppe til hoyre - begge er utenfor 9:16-utsnittet. Skal ikke gi ett eneste klipp. (Regresjon: DQkBYvQGW4E)
+make("2026-09-14 20-00-00.mkv", 60,
+     [(20, 30, "KILL CONFIRMED  VEHICLE DESTROYED", FEED_XY), (20, 30, "+$1,200  VEHICLE DESTROYED", MONEY_XY)])
 for f in os.listdir(os.path.join(T, "rec")):
     os.utime(os.path.join(T, "rec", f), (time.time() - 600, time.time() - 600))   # gamle nok
 
@@ -39,8 +49,8 @@ C.save_settings(s)
 L = C.load_ledger()
 
 # første skann: størrelser registreres, ingenting er "stabilt" ennå -> 0 klare; andre skann -> alle 3
-assert len(C.ready_sources(s, L)) == 3   # mtime-alder er hovedgjerdet; størrelse er ekstra sjekk ved neste skann
-assert len(C.ready_sources(s, L)) == 3
+assert len(C.ready_sources(s, L)) == 4   # mtime-alder er hovedgjerdet; størrelse er ekstra sjekk ved neste skann
+assert len(C.ready_sources(s, L)) == 4
 r = C.run_once(s, L, killclip, log=print)
 print("\nRESULTAT:", json.dumps({k: v for k, v in r.items()}, indent=1, ensure_ascii=False))
 print("\nLEDGER clips:")
@@ -48,6 +58,9 @@ for k, v in L["clips"].items(): print(f"  {v['status']:9} {k}  kills={v.get('kil
 pub = sorted(os.listdir(os.path.join(T, "out", "Publish"))); andre = sorted(os.listdir(os.path.join(T, "out", "Other")))
 mont = sorted(os.listdir(os.path.join(T, "out", "Recaps")))
 print("\nPubliser:", pub); print("Andre:", andre); print("Montasje:", mont)
+
+assert not any("2026-09-14" in k for k in L["clips"]), \
+    "tekst bare i venstre feed / penge-HUD skal ikke gi klipp: " + str([k for k in L["clips"] if "2026-09-14" in k])
 
 st = [v["status"] for v in L["clips"].values()]
 assert st.count("duplicate") >= 1, "replay-multikillet skulle vært duplikat av opptak A"

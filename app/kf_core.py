@@ -15,7 +15,7 @@ Ingen opplasting her. Brukeren publiserer fra synkmappa (YouTube-appen på telef
 import os, sys, re, json, glob, time, shutil, tempfile, subprocess, datetime
 
 APP = "KillFeed"
-VERSION = "0.3-alpha"
+VERSION = "0.3.1-alpha"
 CF = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ------------------------------------------------------------------ stier
