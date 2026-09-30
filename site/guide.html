@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KillFeed – walkthrough</title>
+<meta name="description" content="From downloading KillFeed to your first posted short: the setup wizard, the folders, how clips are chosen, marking the good ones, and what every setting does.">
+<meta property="og:title" content="KillFeed – walkthrough">
+<meta property="og:description" content="From download to your first posted short. Every screen, every setting, and what to do when something looks wrong.">
+<meta property="og:url" content="https://killfeed.no/guide">
+<link rel="icon" type="image/png" href="/killfeed.png">
+<style>
+:root{--bg:#0f0f10;--panel:#18181b;--field:#232326;--fg:#f2f2f2;--muted:#9a9a9a;--gold:#d4af37;--gold-hi:#e6c65a;--line:#2a2a2e;--warn:#e0736d}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 "Segoe UI",system-ui,-apple-system,sans-serif;scroll-behavior:smooth}
+a{color:var(--gold)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 20px}
+header{display:flex;align-items:center;justify-content:space-between;padding:22px 0;flex-wrap:wrap;gap:12px}
+.brand{display:flex;align-items:center;gap:12px;color:var(--fg);text-decoration:none;font-weight:800;letter-spacing:.08em;font-size:18px}
+.brand img{width:36px;height:36px}
+nav a{color:var(--muted);text-decoration:none;margin-left:22px;font-size:15px}
+nav a:hover{color:var(--fg)}
+.top{padding:44px 0 8px;border-bottom:1px solid var(--line)}
+h1{font-size:clamp(30px,4.4vw,46px);line-height:1.1;margin:0 0 16px;font-weight:800}
+h1 span{color:var(--gold)}
+.lead{font-size:19px;color:#d0d0d0;margin:0 0 30px;max-width:660px}
+.badge{display:inline-block;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);border:1px solid var(--gold);border-radius:999px;padding:4px 12px;margin-bottom:18px}
+
+.layout{display:grid;grid-template-columns:220px 1fr;gap:44px;padding:36px 0 10px;align-items:start}
+.toc{position:sticky;top:20px}
+.toc div{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--gold);margin-bottom:12px}
+.toc a{display:block;color:var(--muted);text-decoration:none;font-size:14px;padding:5px 0;border-left:2px solid var(--line);padding-left:12px}
+.toc a:hover{color:var(--fg);border-left-color:var(--gold)}
+
+section{padding:16px 0 44px;border-top:1px solid var(--line);margin-top:28px}
+section:first-of-type{border-top:0;margin-top:0}
+h2{font-size:27px;margin:0 0 6px;scroll-margin-top:24px}
+h2 .n{color:var(--gold);font-size:13px;letter-spacing:.14em;display:block;margin-bottom:8px;font-weight:800}
+.sub{color:var(--muted);margin:0 0 24px}
+h3{font-size:18px;margin:28px 0 8px}
+p{margin:0 0 14px;color:#d4d4d4}
+ul{margin:0 0 16px;padding-left:20px;color:#d4d4d4}
+li{margin-bottom:7px}
+code,.k{background:var(--field);border-radius:5px;padding:2px 7px;font-family:Consolas,monospace;font-size:14px;color:var(--gold)}
+
+.steps{counter-reset:s}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px 20px 64px;margin-bottom:12px;position:relative;counter-increment:s}
+.step::before{content:counter(s);position:absolute;left:22px;top:20px;width:28px;height:28px;border-radius:50%;background:var(--gold);color:#111;font-weight:800;display:grid;place-items:center;font-size:15px}
+.step h3{margin:0 0 6px;font-size:17px}
+.step p:last-child{margin-bottom:0}
+
+.folders{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:18px 0}
+.folder{background:var(--field);border-radius:12px;padding:15px 18px}
+.folder b{color:var(--gold);font-family:Consolas,monospace}
+.folder span{display:block;color:#c9c9c9;font-size:14px;margin-top:4px}
+
+.note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--gold);border-radius:0 12px 12px 0;padding:16px 20px;margin:20px 0}
+.note.warn{border-left-color:var(--warn)}
+.note b{color:var(--gold)}
+.note.warn b{color:var(--warn)}
+.note p:last-child{margin-bottom:0}
+
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--gold);font-size:13px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
+td:first-child{white-space:nowrap;color:#e8e8e8}
+td code{white-space:nowrap}
+
+details{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:10px}
+summary{cursor:pointer;font-weight:600;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"+";color:var(--gold);display:inline-block;width:22px;font-weight:800}
+details[open] summary::before{content:"–"}
+details p{margin:10px 0 0 22px;color:#c9c9c9;font-size:15px}
+details ul{margin:10px 0 0 22px}
+
+.btn{display:inline-block;background:var(--gold);color:#111;font-weight:700;padding:14px 24px;border-radius:10px;text-decoration:none;font-size:16px}
+.btn:hover{background:var(--gold-hi)}
+.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);margin-left:10px}
+.btn.ghost:hover{border-color:var(--gold);color:var(--gold)}
+
+footer{padding:36px 0;color:var(--muted);font-size:14px;border-top:1px solid var(--line);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+footer a{color:var(--muted)}
+@media(max-width:860px){.layout{grid-template-columns:1fr;gap:0}.toc{position:static;margin-bottom:24px}.toc a{display:inline-block;border-left:0;border-bottom:2px solid var(--line);margin-right:10px;padding:4px 0}.folders{grid-template-columns:1fr}nav a{margin-left:14px}.btn.ghost{margin:10px 0 0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a class="brand" href="/"><img src="/killfeed.png" alt="">KILLFEED</a>
+  <nav><a href="/">Home</a><a href="/guide">Walkthrough</a><a href="https://github.com/kristofferlending/killfeed/releases">Download</a><a href="https://discord.gg/YSRt9t7gq">Discord</a></nav>
+</header>
+
+<div class="top">
+  <div class="badge">Walkthrough · alpha</div>
+  <h1>From download to your<br><span>first posted short.</span></h1>
+  <p class="lead">Every screen, what each setting actually changes, and what to do when the result is not what you expected. Fifteen minutes to read, five to set up.</p>
+</div>
+
+<div class="layout">
+<aside class="toc">
+  <div>On this page</div>
+  <a href="#before">Before you start</a>
+  <a href="#setup">First run</a>
+  <a href="#first">The first pass</a>
+  <a href="#folders">The folders</a>
+  <a href="#dashboard">The Dashboard</a>
+  <a href="#browser">Picking the good ones</a>
+  <a href="#tuning">Tuning what gets cut</a>
+  <a href="#recap">The recap</a>
+  <a href="#disk">Disk space</a>
+  <a href="#wrong">When it looks wrong</a>
+</aside>
+
+<main>
+
+<section id="before">
+  <h2><span class="n">01</span>Before you start</h2>
+  <p class="sub">KillFeed reads the text on your HUD. If the text is not in the recording, there is nothing to read.</p>
+
+  <p>You need Windows 10 or 11, and WARDOGS recordings from any tool — OBS, NVIDIA ShadowPlay, Medal, Aitum Vertical, Xbox Game Bar. Three things matter about those recordings:</p>
+
+  <ul>
+    <li><b>1080p or 1440p.</b> The text zones are measured as fractions of the frame, so any 16:9 resolution works, but these two are what the alpha is tuned on.</li>
+    <li><b>HUD scale at 100 %.</b> Below that the kill banner shrinks out of the zone KillFeed reads and kills start going missing.</li>
+    <li><b>The whole game window.</b> If you crop your capture, crop from the edges, not around the crosshair.</li>
+  </ul>
+
+  <p>You do not need to record at high quality. KillFeed only needs to read text and cut 15–30 second pieces, and YouTube re-encodes everything you upload anyway. If your recordings are eating your disk, turn the quality down before you turn anything else down — on NVENC, CQP 23–24 is usually indistinguishable from CQP 20 once it has been through YouTube, at roughly half the size.</p>
+
+  <div class="note">
+    <p><b>No recordings yet?</b> The app has a built-in recording guide with the exact menu paths for OBS, ShadowPlay and Medal. It is the link on the first page of the setup wizard: <i>No recordings yet? How to set up OBS / ShadowPlay / Medal</i>.</p>
+  </div>
+</section>
+
+<section id="setup">
+  <h2><span class="n">02</span>First run: four questions</h2>
+  <p class="sub">There is no installer. Double-click <code>KillFeed.exe</code> and the wizard opens. Windows SmartScreen warns once because the alpha is not code-signed — <i>More info → Run anyway</i>.</p>
+
+  <div class="steps">
+    <div class="step">
+      <h3>Where are your recordings?</h3>
+      <p>Point at the folder your recording tool writes to. Sub-folders are searched two levels deep, so <code>Videos\</code> works if everything lives under it.</p>
+      <p>If you record vertical clips separately — Aitum Vertical, for example — tick <i>I also record ready-made vertical 9:16</i> and give that folder too. When the same kill exists in both, KillFeed keeps the vertical one, because it is already the right shape.</p>
+      <p>Use <i>Test: how many recordings will it find?</i> before moving on. It tells you the count and roughly how long a full pass will take.</p>
+    </div>
+    <div class="step">
+      <h3>What should KillFeed make?</h3>
+      <p>Shorts, recaps, or both. Recaps are off to one side of the main job: a chronological 16:9 summary of the day, built from your normal recordings once enough has collected. If you only want clips to post, leave recaps off — it is less work for your PC.</p>
+    </div>
+    <div class="step">
+      <h3>What is good enough to publish?</h3>
+      <p>This is the one that decides how much lands in <code>Publish\</code>:</p>
+      <ul>
+        <li><b>Multikills and vehicle kills</b> — the default, and what the channel data supports.</li>
+        <li><b>Multikills only</b> — two or more kills in the same clip, nothing else.</li>
+        <li><b>Every kill</b> — everything goes to Publish and you sort it yourself.</li>
+      </ul>
+      <p>You can change this later without losing anything. When you do, KillFeed moves the clips you already have between <code>Publish\</code> and <code>Other\</code> to match the new rule, rather than only applying it to the next thing it cuts.</p>
+    </div>
+    <div class="step">
+      <h3>Where should the finished clips go?</h3>
+      <p>Either next to your recordings, or in a folder that syncs to your phone — OneDrive, Google Drive, Dropbox. The second option is the reason most people post from the YouTube app ten minutes after a session: the clip is already on the phone.</p>
+      <p>KillFeed creates <code>Publish\</code>, <code>Other\</code> and <code>Recaps\</code> itself when there is something to put in them.</p>
+    </div>
+  </div>
+
+  <p>Tick <i>Start KillFeed with Windows</i> and press <b>Start KillFeed</b>. That is the whole setup.</p>
+</section>
+
+<section id="first">
+  <h2><span class="n">03</span>The first pass takes hours. That is normal.</h2>
+  <p class="sub">Reading text out of video is slow. Everything after the first pass is fast, because each recording is only ever read once.</p>
+
+  <p>Reckon on roughly <b>20 to 30 minutes per hour of recording</b>. A folder with a week of evening sessions in it is an overnight job. You can use the PC normally while it runs — KillFeed waits until the game is closed before it starts, so it never takes CPU mid-match.</p>
+
+  <p>After that first pass, a session is clipped in the time it takes to read it once, usually while you are still winding down.</p>
+
+  <div class="note">
+    <p><b>"Nothing new" right after a session is expected.</b> KillFeed leaves a file alone until it has stopped growing and is at least two minutes old, so it never reads a recording that is still being written. Give it a couple of minutes and press <i>Run now</i> again.</p>
+  </div>
+</section>
+
+<section id="folders">
+  <h2><span class="n">04</span>What lands where</h2>
+  <p class="sub">Four folders, and a page you open in your browser.</p>
+
+  <div class="folders">
+    <div class="folder"><b>Publish\</b><span>Passed your rule. These are the ones to post.</span></div>
+    <div class="folder"><b>Other\</b><span>Cut, but did not pass. Kept in case you disagree.</span></div>
+    <div class="folder"><b>Recaps\</b><span>The daily 16:9 summary, if you turned recaps on.</span></div>
+    <div class="folder"><b>RecapBank\</b><span>Small pre-cut pieces the recap is built from.</span></div>
+  </div>
+
+  <p>Every clip comes with a <code>.txt</code> next to it holding a ready-made title, and a <code>.json</code> with what KillFeed saw — kills, vehicles, distance, the clock time of each event. Post the mp4, paste the title, done.</p>
+
+  <p><b>RecapBank</b> deserves a word, because it is not obvious. The recap is cut from your original recording, not from the finished shorts. That means deleting recordings to save space would quietly delete kills out of every future recap. So while KillFeed is clipping, it also saves the recap-sized pieces as small separate files — under a gigabyte per session, against tens of gigabytes for the recording. Once a session is in the bank, the recording is no longer needed for anything.</p>
+</section>
+
+<section id="dashboard">
+  <h2><span class="n">05</span>The Dashboard</h2>
+  <p class="sub">KillFeed lives in the tray next to the clock. On Windows 11 the icon usually hides under the <b>^</b> arrow — click that to find it. Right-click the icon to open or quit.</p>
+
+  <table>
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td>Run now</td><td>Checks for new recordings immediately instead of waiting for the next minute. During a run this button becomes <i>Stop after this file</i>, then <i>Stop now</i>.</td></tr>
+    <tr><td>Pause</td><td>Stops picking up new work without forgetting anything. Useful if you want the CPU back.</td></tr>
+    <tr><td>Make recap now</td><td>Builds a recap from whatever has collected, even if it is below the minimum length.</td></tr>
+    <tr><td>Browse clips</td><td>Builds a page of every clip with thumbnails and opens it in your browser. This is where you mark the good ones — see below.</td></tr>
+    <tr><td>Recent clips</td><td>The list at the bottom. Double-click to play. Right-click for two useful things.</td></tr>
+  </table>
+
+  <p>Those two right-click options are worth knowing:</p>
+
+  <ul>
+    <li><b>Why is it in this folder?</b> — states the rule, the clip's own numbers, and the verdict, in three lines. If you ever disagree with where a clip landed, start here.</li>
+    <li><b>Re-clip the recording it came from</b> — reads that recording again with your current settings. The clips it already made stay on disk, but they leave the app's list.</li>
+  </ul>
+</section>
+
+<section id="browser">
+  <h2><span class="n">06</span>Picking the good ones</h2>
+  <p class="sub">The one judgement in the whole pipeline that is not a formula.</p>
+
+  <p>Press <b>Browse clips</b> and you get a page of every clip with a thumbnail, its kills, distance and length, sortable and searchable. Each clip has two buttons: <b>▲</b> and <b>▼</b>.</p>
+
+  <ul>
+    <li><b>▲ worth posting</b> — jumps to the front of the queue, and gets posted even if it would not otherwise have passed your rule.</li>
+    <li><b>▼ never post this</b> — never uploaded, by anything, ever.</li>
+  </ul>
+
+  <p>Two filters at the top, <i>Marked ▲</i> and <i>Marked ▼</i>, show what you have decided so far.</p>
+
+  <p>This exists because of something worth being straight about: <b>KillFeed cannot tell a good clip from a lucky one.</b> It counts kills, vehicles, distance and seconds, and none of those reliably predict whether anyone watches. The score sorts the queue into a sensible order and keeps the empty ones out. Which of the survivors is actually worth posting is a judgement, and you are the one who can make it.</p>
+
+  <div class="note">
+    <p><b>Open it from the app, not from the folder.</b> The page saves your marks by talking to KillFeed itself, over a small server that only listens on your own machine. Opened straight off disk — or from your phone after syncing — the page still works, but the buttons will tell you they cannot save.</p>
+  </div>
+</section>
+
+<section id="tuning">
+  <h2><span class="n">07</span>Tuning what gets cut</h2>
+  <p class="sub">Advanced tab. Every value takes effect on the next run, and the ones marked below also re-sort the clips you already have.</p>
+
+  <h3>Shorts</h3>
+  <table>
+    <tr><th>Setting</th><th>What it changes</th></tr>
+    <tr><td>Seconds before the kill</td><td>The lead-in. 8 s by default. Helicopter players often want less, infantry players more — this is the single setting most worth experimenting with.</td></tr>
+    <tr><td>Seconds after the last kill</td><td>The tail. 3 s is usually enough; the kill is the payoff, not what follows it.</td></tr>
+    <tr><td>Minimum / maximum short length</td><td>15 to 30 seconds. Viewers watch about 17–23 seconds whatever the length, so longer mostly costs you.</td></tr>
+    <tr><td>Kills must be within N s of each other</td><td>What counts as a burst. Two kills twenty seconds apart make a long clip where nothing happens in the middle — those go to <code>Other\</code> instead.</td></tr>
+    <tr><td>Skip a lone kill with nothing within N s</td><td>A single kill standing on its own is not cut at all. On a typical session that is three quarters of everything KillFeed would otherwise produce, and none of it could reach Publish anyway. A kill and the vehicle it destroyed count as one moment together, so those are kept — as is a vehicle kill on its own.</td></tr>
+  </table>
+
+  <h3>Turning 16:9 into 9:16</h3>
+  <p>Three ways, under <i>How 16:9 recordings become 9:16</i>:</p>
+  <ul>
+    <li><b>Centre crop</b> — sharp, fills the frame, shows the area around your crosshair. The default.</li>
+    <li><b>Blurred background</b> — the whole picture, with the sides filled in. Nothing is cut off, but the gameplay appears smaller.</li>
+    <li><b>Split</b> — the whole picture across the top, and a zoomed centre crop below it. You keep the HUD and the kill feed readable and still get the action large. Worth trying if you have no vertical recording of a moment.</li>
+  </ul>
+  <p>If you record vertical clips separately, none of this applies to those — they go through untouched.</p>
+
+  <h3>Scoring</h3>
+  <p>Clips are ordered by <code>1 point a kill + 2 a vehicle + 1 per 100 m − half a point a second over 22</code>. It is an ordering you can do in your head, not a prediction. Anything you mark <b>▲</b> goes in front of all of it.</p>
+</section>
+
+<section id="recap">
+  <h2><span class="n">08</span>The recap</h2>
+  <p class="sub">A chronological 16:9 summary of your kills, cut from your normal recordings.</p>
+
+  <p>It builds itself once enough has collected — between the minimum and maximum length you set — or immediately when you press <i>Make recap now</i>. The settings worth knowing:</p>
+
+  <table>
+    <tr><td>Minimum kills for a clip to be included</td><td>Raise this to 2 and the recap becomes a highlight reel instead of a log. On a typical session it cuts about 80 % of the material.</td></tr>
+    <tr><td>Use recordings from the last N days</td><td>How far back it looks for material it has not used yet.</td></tr>
+    <tr><td>Seconds before / after each kill</td><td>Tighter than the shorts settings, because the clips are strung together.</td></tr>
+  </table>
+
+  <div class="note">
+    <p><b>Be honest with yourself about whether you want one.</b> A ten-minute recap is a different kind of video from a short, and it competes for attention against everything else on the platform rather than in the Shorts feed. If it is not getting watched, the answer is usually to raise the minimum kills until it is short enough to be a Short, not to make more of them.</p>
+  </div>
+</section>
+
+<section id="disk">
+  <h2><span class="n">09</span>Disk space</h2>
+  <p class="sub">Recordings are tens of gigabytes. The clips made from them are tens of megabytes. That gap is where all your disk goes.</p>
+
+  <p>Under <b>Advanced → Disk space</b> there are three settings, and they only make sense together:</p>
+
+  <table>
+    <tr><th>Setting</th><th>What it means</th></tr>
+    <tr><td>Delete the recording once it has been clipped</td><td>Off by default. When on, the original is deleted after KillFeed has finished with it.</td></tr>
+    <tr><td>…but keep it until its kills have been used in a recap</td><td>The brake. With this on, a recording stays until the recap no longer needs it.</td></tr>
+    <tr><td>Keep the recap pieces as separate small files</td><td>On by default. Once a session is in the bank, the recap does not need the recording any more — so this is what makes deleting safe.</td></tr>
+  </table>
+
+  <div class="note warn">
+    <p><b>This cannot be undone.</b> A deleted recording does not go to the Recycle Bin. Before you turn it on, let one full pass finish with it off, look at the clips it made, and satisfy yourself that the detection is finding what you expect. Then turn it on.</p>
+    <p>KillFeed will not delete a recording it failed to clip, and it will not delete one where it read no kill text at all — a session that looks completely empty is far more likely to mean something is wrong with the setup than that nothing happened.</p>
+  </div>
+
+  <p>There is also <i>Delete clips in Other\ after N days</i>, which is a much smaller and much safer lever: those are clips you have already decided not to post.</p>
+</section>
+
+<section id="wrong">
+  <h2><span class="n">10</span>When it looks wrong</h2>
+  <p class="sub">Most problems are one of five things.</p>
+
+  <details><summary>It found no kills at all</summary>
+    <p>Almost always the HUD. Check it is at 100 % scale and that your capture includes the whole game window. Then check the resolution is 16:9 — an ultrawide recording puts the kill banner somewhere KillFeed is not looking.</p>
+    <p>If a single recording fails but others work, that recording may be damaged or still writing. Try playing it.</p>
+  </details>
+
+  <details><summary>A clip says one kill but there are clearly two</summary>
+    <p>Two kills in a row overlap on screen: the second banner replaces the first with no dark frame between them. KillFeed tells them apart by the reward printed inside the banner. If the amounts happen to be identical it can still merge them — rare, and deliberately preferred over inventing kills that did not happen.</p>
+  </details>
+
+  <details><summary>A clip has no kill in it</summary>
+    <p>Only the banner under your crosshair can create a kill. The money counter and the kill feed down the left side show what everyone on the server is doing, and both are outside the 9:16 crop — they contribute distance and amounts, never events. If you see a clip with nothing in it, that is a bug worth reporting, with the clip.</p>
+  </details>
+
+  <details><summary>Good clips are landing in Other\</summary>
+    <p>Right-click the clip and choose <i>Why is it in this folder?</i> — it will tell you which rule it failed. Usually it is either the burst rule (kills too far apart) or the publish rule. Change the setting and KillFeed will move the existing clips to match.</p>
+  </details>
+
+  <details><summary>Everything is slow, or the disk fills up</summary>
+    <p>Lower your recording quality first — it is almost always the cause, and it costs you nothing visible. Then turn on <i>Skip a lone kill</i> if it is off, which removes most of the clipping work. Deleting recordings is the last lever, not the first.</p>
+  </details>
+
+  <details><summary>Something else</summary>
+    <p>Press <b>Send feedback</b> in the app. It puts a zip on your desktop with the log and the text KillFeed read — never any video. Drop it in <b>#feedback</b> on <a href="https://discord.gg/YSRt9t7gq">Discord</a> with your resolution, recording tool and class.</p>
+  </details>
+
+  <p style="margin-top:28px">
+    <a class="btn" href="https://github.com/kristofferlending/killfeed/releases">Download KillFeed.exe</a>
+    <a class="btn ghost" href="https://discord.gg/YSRt9t7gq">Ask on Discord</a>
+  </p>
+</section>
+
+</main>
+</div>
+
+<footer>
+  <div>© 2026 KillFeed · made in Solund, Norway by <a href="https://leq.no">Lending Equipment</a></div>
+  <div><a href="/">Home</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="https://github.com/kristofferlending/killfeed">GitHub</a> · <a href="https://discord.gg/YSRt9t7gq">Discord</a></div>
+</footer>
+</div>
+</body>
+</html><!-- killfeed.no/guide · deployed from site/ via Vercel -->

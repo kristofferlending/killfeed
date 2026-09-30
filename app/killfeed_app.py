@@ -8,7 +8,7 @@ Shows a Windows notification only when something new is ready.
 
 Command line: --tray (start straight into the tray, used by autostart), --run (one pass, no GUI, then exit).
 """
-import os, sys, threading, time, datetime, glob, zipfile, subprocess, ctypes
+import os, sys, threading, time, datetime, glob, zipfile, subprocess, ctypes, webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -371,6 +371,7 @@ class App(tk.Tk):
         if probs: self.after(500, lambda: messagebox.showwarning(APP, "KillFeed cannot start clipping until this is fixed:\n\n• " + "\n• ".join(probs)))
         self.protocol("WM_DELETE_WINDOW", self.hide)
         self._start_tray()
+        self._start_clip_server()   # before any run, so the page written at the end of one can save marks
         if not start_hidden: self.show()
         threading.Thread(target=self._watch_loop, daemon=True).start()
         self.after(300, self._pump)
@@ -418,6 +419,8 @@ class App(tk.Tk):
         self.b_recap = ttk.Button(row, text="Make recap now", command=self.montage_now); self.b_recap.pack(side="left")
         Tip(self.b_recap, "Build a recap from what is collected so far, even if it is shorter than the minimum.")
         b = ttk.Button(row, text="Open output folder", command=self.open_out); b.pack(side="right")
+        bb = ttk.Button(row, text="Browse clips", command=self.open_clip_browser); bb.pack(side="right", padx=8)
+        Tip(bb, "Every clip with a still picture, sortable by kills, distance or length. Opens in your browser.")
 
         lf = ttk.Frame(d); lf.pack(fill="both", expand=True, pady=(14, 0))
         hdr = ttk.Frame(lf); hdr.pack(fill="x")
@@ -515,8 +518,9 @@ class App(tk.Tk):
         ttk.Checkbutton(g, text="If a session gives nothing for Publish, promote its best single kill anyway", variable=self.v_fallback).pack(anchor="w", pady=(6, 0))
         ttk.Label(g, text="How 16:9 recordings become 9:16:").pack(anchor="w", pady=(8, 0))
         r = ttk.Frame(g); r.pack(anchor="w", padx=(18, 0))
-        ttk.Radiobutton(r, text="Centre crop (sharp, shows the crosshair area)", variable=self.v_style, value="center").pack(side="left")
-        ttk.Radiobutton(r, text="Blurred background (whole picture, smaller)", variable=self.v_style, value="blur").pack(side="left", padx=(16, 0))
+        ttk.Radiobutton(r, text="Centre crop (sharp, shows the crosshair area)", variable=self.v_style, value="center").pack(anchor="w")
+        ttk.Radiobutton(r, text="Blurred background (whole picture, smaller)", variable=self.v_style, value="blur").pack(anchor="w")
+        ttk.Radiobutton(r, text="Split (whole picture on top, action zoomed below)", variable=self.v_style, value="stack").pack(anchor="w")
 
         g = group("Recap", "A 16:9 chronological summary of the day's kills, cut from your normal recordings. Saved as “WARDOGS <name> <date>.mp4” in Recaps\\.")
         ttk.Checkbutton(g, text="Make recaps", variable=self.v_menabled).pack(anchor="w")
@@ -551,6 +555,13 @@ class App(tk.Tk):
                 ("Join kills closer than N s into one short", ("shorts", "gap"), "Two kills 8 s apart become one multikill short when this is 12."),
                 ("Minimum short length, seconds", ("shorts", "min"), None),
                 ("Maximum short length, seconds", ("shorts", "max"), "YouTube Shorts allow up to 60 s; 20–35 s performs best."),
+                ("Skip a lone kill with nothing within N s (0 = keep them)", ("shorts", "lonely_gap_s"),
+                 "Measured over six sessions, 76 % of every clip cut was a single kill with nothing near it. "
+                 "None of them can reach Publish anyway, so they only cost clipping time and disk. A kill and "
+                 "the vehicle it destroyed count as one moment together, so those are kept."),
+                ("Kills must be within N s of each other", ("shorts", "max_kill_span"),
+                 "A burst is what people watch. Two kills 25 s apart make a long short where nothing happens in between, "
+                 "so those go to Other instead. A vehicle kill always counts on its own."),
             ]),
             ("Recap", [
                 ("Seconds before each kill", ("montage", "pre"), None),
@@ -576,6 +587,25 @@ class App(tk.Tk):
                     sp = ttk.Spinbox(parent, from_=0, to=999, textvariable=v, width=6); sp.grid(row=r, column=1, sticky="w")
                     if tip: Tip(l, tip); Tip(sp, tip)
                     r += 1
+        ttk.Label(av, text="Disk space", style="Group.TLabel").pack(anchor="w", pady=(14, 2))
+        ds = ttk.Frame(av); ds.pack(fill="x", padx=(12, 0))
+        self.v_delsrc = tk.BooleanVar(value=self.s.get("cleanup", {}).get("delete_source_after_clip", False))
+        self.v_keeprecap = tk.BooleanVar(value=self.s.get("cleanup", {}).get("keep_source_for_recap", True))
+        c1 = ttk.Checkbutton(ds, text="Delete the recording once it has been clipped", variable=self.v_delsrc)
+        c1.pack(anchor="w")
+        Tip(c1, "A recording is tens of GB, the clips are tens of MB. This cannot be undone – the file is gone, "
+                "not moved to the Recycle Bin. Recordings that failed to clip are always kept.")
+        c2 = ttk.Checkbutton(ds, text="    …but keep it until its kills have been used in a recap", variable=self.v_keeprecap)
+        c2.pack(anchor="w")
+        self.v_bank = tk.BooleanVar(value=self.s.get("cleanup", {}).get("recap_bank", True))
+        c3 = ttk.Checkbutton(ds, text="Keep the recap pieces as separate small files (RecapBank\\)", variable=self.v_bank)
+        c3.pack(anchor="w")
+        Tip(c3, "Cuts the recap-sized pieces out while clipping and keeps them next to your clips – under a "
+                "gigabyte per session instead of tens. Once a recording is in the bank the recap no longer "
+                "needs it, so it can be deleted straight away.")
+        Tip(c2, "The recap is cut from the recording itself, not from the shorts. Turn this off and a kill that has "
+                "not made it into a recap yet will never appear in one.")
+
         b = ttk.Frame(av); b.pack(fill="x", pady=(14, 0))
         ttk.Button(b, text="Save", command=self.save_settings, style="Primary.TButton").pack(side="left")
         ttk.Button(b, text="Reset to defaults", command=self.reset_defaults).pack(side="left", padx=8)
@@ -584,10 +614,16 @@ class App(tk.Tk):
         m = ttk.Frame(av); m.pack(fill="x")
         b1 = ttk.Button(m, text="Rescan everything", command=self.rescan_all); b1.pack(side="left")
         Tip(b1, "Clip every recording again – you choose whether the old clips are deleted first, kept, or only failed recordings are retried.")
+        b0 = ttk.Button(m, text="Reset and start over", command=self.reset_all, style="Primary.TButton"); b0.pack(side="left", padx=8)
+        Tip(b0, "Throw away every clip KillFeed has made and clip all your recordings again from scratch with the "
+                "current settings. Your own recordings are never touched, and nothing already on YouTube is removed.")
         b2 = ttk.Button(m, text="Open settings folder", command=lambda: os.startfile(C.appdata_dir())); b2.pack(side="left", padx=8)
         Tip(b2, "settings.json, ledger.json, killfeed.log and the text reports live here.")
         b3 = ttk.Button(m, text="Check for updates", command=self.check_updates); b3.pack(side="left")
         Tip(b3, f"Opens the download page. You are running {VERSION}.")
+        b4 = ttk.Button(m, text="Browse clips", command=self.open_clip_browser); b4.pack(side="left", padx=8)
+        Tip(b4, "Builds clips.html in your output folder and opens it: every clip with a still, sortable by "
+                "kills, distance or length. It syncs to your phone with the clips.")
         hint(av, f"{C.appdata_dir()}", wraplength=820).pack(anchor="w", pady=(6, 0))
 
     # ---- log
@@ -623,19 +659,36 @@ class App(tk.Tk):
         s["montage"]["enabled"] = self.v_menabled.get(); s["montage"]["auto"] = self.v_mauto.get()
         s["montage"]["min_minutes"] = max(1, self.v_mmin.get()); s["montage"]["max_minutes"] = max(s["montage"]["min_minutes"], self.v_mmax.get())
         s["montage"]["label"] = self.v_mlabel.get().strip() or "recap"
+        s["cleanup"]["delete_source_after_clip"] = self.v_delsrc.get()
+        s["cleanup"]["keep_source_for_recap"] = self.v_keeprecap.get()
+        s["cleanup"]["recap_bank"] = self.v_bank.get()
         for key, v in self.adv.items():
             d = s
             for k in key[:-1]: d = d[k]
             try: d[key[-1]] = int(v.get())
             except Exception: pass
         before = self._clip_signature
+        rule_before = self._rule_signature()
         C.save_settings(s); set_autostart(s["autostart"])
+        if rule_before != self._rule_signature():
+            try:
+                np, na = C.resort_clips(s, self.L, log=self.log)
+                if np or na:
+                    self.status(f"Re-sorted with the new rule: {np} to Publish, {na} to Other.", "")
+                    self.refresh_stats()
+            except Exception as e:
+                self.log(f"Could not re-sort existing clips: {e}")
         probs = C.preflight(self.s, killclip)
         self.log("Settings saved."); self.v_saved.set(f"Saved {datetime.datetime.now():%H:%M}" + ("" if not probs else " – but: " + probs[0]))
         self.status("Settings saved.", "")
         self._clip_signature = self._sig()
         if before != self._clip_signature and self.L["processed"]:
             self.rescan_all("You changed how clips are cut. Existing clips were made with the old values.")
+
+    def _rule_signature(self):
+        """What decides Publish vs Other. Changing this re-sorts the clips we already have."""
+        sh = self.s["shorts"]
+        return (sh.get("min_kills"), sh.get("min_vehicles"), sh.get("max_kill_span", 10))
 
     def _sig(self):
         return tuple(self._get(k) for k in sorted(C.CLIP_KEYS))
@@ -651,12 +704,6 @@ class App(tk.Tk):
     def rescan_all(self, reason=None):
         """Stop whatever is running right now, ask how to rescan, then do it as soon as the current file has let go."""
         self.log(f"Rescan requested (busy={self.busy})."); self.show()
-        if self.busy:
-            self.stop_req = True; killclip.ABORT = True
-            for pr in list(getattr(killclip, "_procs", [])):
-                try: pr.kill()
-                except Exception: pass
-            self.status("Stopping…", "The file being clipped is left for next time.")
         nfail = C.failed_count(self.L)
         opts = [("Start fresh", "fresh"), ("Re-clip, keep clips", "keep")]
         if nfail: opts.append((f"Retry {nfail} failed", "retry"))
@@ -670,8 +717,43 @@ class App(tk.Tk):
         if not ans:
             self.log("Rescan cancelled."); return
         self._pending_action = ans; self.nb.select(0)
-        if self.busy: self.status("Stopping…", "Rescan starts as soon as the current file has been aborted.")
+        if self.busy:
+            # abort only now that the answer is in - Cancel used to leave the current file killed anyway
+            self.stop_req = True; killclip.ABORT = True
+            for pr in list(getattr(killclip, "_procs", [])):
+                try: pr.kill()
+                except Exception: pass
+            self.status("Stopping…", "Rescan starts as soon as the current file has been aborted.")
         else: self._apply_rescan()
+
+    def reset_all(self):
+        """Empty the queue and clip everything again - the one button for 'start over with the current rules'.
+        It deliberately stops at the disk: recordings are never deleted here, and neither is anything that has
+        already gone to YouTube. The nightly job skips a re-cut clip of a kill it has already uploaded, because
+        it matches on the clock time of the kills and not on the file name."""
+        n_clips = len(self.L.get("clips", {}))
+        ok = choose(self, "Reset and start over",
+                    "This throws away everything KillFeed has made and starts again:\n\n"
+                    f"   • {n_clips} clip(s) in Publish\\, Other\\ and Recaps\\ are deleted\n"
+                    "   • the recap bank is emptied\n"
+                    "   • every recording is clipped again with the settings you have now\n\n"
+                    "Your own recordings are not touched, and videos already on YouTube are left alone – the "
+                    "nightly job recognises a kill it has already uploaded even if the clip is cut slightly "
+                    "differently this time.\n\n"
+                    "Clipping everything again takes hours. You can keep using the PC while it runs.",
+                    [("Reset and start over", "fresh"), ("Cancel", None)])
+        if not ok:
+            self.log("Reset cancelled."); return
+        self.log("Reset requested."); self.show()
+        if self.busy:
+            self.stop_req = True; killclip.ABORT = True
+            for pr in list(getattr(killclip, "_procs", [])):
+                try: pr.kill()
+                except Exception: pass
+            self._pending_action = "fresh"
+            self.status("Stopping…", "The reset starts as soon as the current file has been aborted.")
+            self.nb.select(0); return
+        self._pending_action = "fresh"; self.nb.select(0); self._apply_rescan()
 
     def _apply_rescan(self):
         ans, self._pending_action = self._pending_action, None
@@ -791,6 +873,7 @@ class App(tk.Tk):
                 pystray.MenuItem(lambda i: "Working…" if self.busy else "Run now", lambda: self.after(0, self.run_now), enabled=lambda i: not self.busy),
                 pystray.MenuItem("Make recap now", lambda: self.after(0, self.montage_now)),
                 pystray.MenuItem("Open output folder", lambda: self.after(0, self.open_out)),
+                pystray.MenuItem("Browse clips", lambda: self.after(0, self.open_clip_browser)),
                 pystray.MenuItem("Pause", lambda: self.after(0, self.toggle_pause), checked=lambda i: self.paused),
                 pystray.MenuItem("Discord", lambda: self.after(0, self.open_discord)),
                 pystray.Menu.SEPARATOR,
@@ -801,6 +884,137 @@ class App(tk.Tk):
         except Exception as e:
             self.icon = None; self.log(f"Tray icon could not be created ({e}). The window stays open; use Quit to stop.")
             self.protocol("WM_DELETE_WINDOW", self.quit_app); self.show()
+
+    def _start_clip_server(self):
+        """A tiny local web server so the clip browser can write your marks back into the ledger.
+
+        127.0.0.1 only, a port the OS picks, and it answers exactly two things: the page itself and a
+        rating. Nothing on the network can reach it and it serves no path of its own choosing - anything
+        else gets a 404. Without it the page still opens from disk, it just cannot save."""
+        import http.server, threading, json as _json, urllib.parse
+        app = self
+        class H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass          # keep the console quiet
+            def _send(self, code, body=b"", ctype="text/plain; charset=utf-8"):
+                self.send_response(code); self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store"); self.end_headers()
+                if body: self.wfile.write(body)
+            def _send_clip(self, full, ctype):
+                """Serve a clip, honouring Range so the browser can scrub and so hover-preview works."""
+                try: size = os.path.getsize(full)
+                except OSError: return self._send(404, b"not found")
+                start, end, status = 0, size - 1, 200
+                rng = self.headers.get("Range") or ""
+                if rng.startswith("bytes="):
+                    try:
+                        a, _, b = rng[6:].partition("-")
+                        if a: start = int(a)
+                        if b: end = min(int(b), size - 1)
+                        if start > end or start >= size: raise ValueError
+                        status = 206
+                    except ValueError:
+                        self.send_response(416); self.send_header("Content-Range", f"bytes */{size}")
+                        self.end_headers(); return
+                length = end - start + 1
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                if status == 206: self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                self.end_headers()
+                try:
+                    with open(full, "rb") as fh:
+                        fh.seek(start); left = length
+                        while left > 0:
+                            chunk = fh.read(min(262144, left))
+                            if not chunk: break
+                            self.wfile.write(chunk); left -= len(chunk)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass                      # the browser moved on mid-clip; nothing to report
+
+            def do_GET(self):
+                path = urllib.parse.urlparse(self.path).path
+                if path in ("/", "/clips.html"):
+                    f = C.clip_page_path(app.s)
+                    try: body = open(f, "rb").read()
+                    except OSError: return self._send(404, b"no clip page yet")
+                    return self._send(200, body, "text/html; charset=utf-8")
+                if path.startswith("/clip/"):
+                    # only ever files inside the output folder, and only the kinds we produce
+                    base = os.path.abspath(app.s.get("output_dir") or "")
+                    rel = urllib.parse.unquote(path[len("/clip/"):])
+                    full = os.path.abspath(os.path.join(base, rel))
+                    if not base or not os.path.isdir(base): return self._send(404, b"no output folder")
+                    if full != base and not full.startswith(base + os.sep): return self._send(404, b"not found")
+                    ct = {".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime",
+                          ".jpg": "image/jpeg", ".txt": "text/plain; charset=utf-8"}.get(os.path.splitext(full)[1].lower())
+                    if not ct or not os.path.isfile(full): return self._send(404, b"not found")
+                    return self._send_clip(full, ct)
+                return self._send(404, b"not found")
+            def do_POST(self):
+                if urllib.parse.urlparse(self.path).path != "/rate":
+                    return self._send(404, b"not found")
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    if n > 4096: return self._send(413, b"too big")
+                    d = _json.loads(self.rfile.read(n) or b"{}")
+                    name, rating = str(d.get("name") or ""), int(d.get("rating") or 0)
+                except Exception:
+                    return self._send(400, b"bad request")
+                if not name: return self._send(400, b"no clip named")
+                ok = C.set_rating(app.L, name, rating)
+                if not ok: return self._send(404, b"unknown clip")
+                app.after(0, lambda: app.log(f"Marked {name}: {'keep' if rating > 0 else ('never post' if rating < 0 else 'undecided')}"))
+                return self._send(200, b'{"ok":true}', "application/json")
+        # A fixed port first: clips.html has the address baked into it, so a page written yesterday (or by
+        # a run that finished overnight) only keeps working if we land on the same port again. Fall back to
+        # whatever is free if something else has taken it.
+        srv = None
+        for port in (8771, 8772, 8773, 0):
+            try:
+                srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H); break
+            except OSError:
+                continue
+        if srv is None:
+            self.log("Clip server could not start – marking clips will not save."); return None
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self._clip_srv = srv
+        C.API_BASE = f"http://127.0.0.1:{srv.server_address[1]}"
+        self.log(f"Clip server on {C.API_BASE}")
+        return C.API_BASE
+
+    def open_clip_browser(self):
+        """Build clips.html from the ledger and open it. Reading only, so it works during a run too –
+        thumbnails are cached, so only clips we have not seen before cost an ffmpeg call."""
+        self.status("Building the clip browser…" + (" (a run is going, so new clips open without a picture)" if self.busy else ""), "")
+        self.log("Building the clip browser…")
+        if not getattr(self, "_clip_srv", None): self._start_clip_server()
+        def work():
+            p, err = None, None
+            try:
+                p = C.write_clip_page(self.s, self.L, killclip, log=self.log, make_thumbs=not self.busy)
+            except Exception as e:
+                err = e; self.log(f"Clip browser failed: {e}")
+            if not p:
+                old = C.clip_page_path(self.s)                 # fall back to the last one we managed to build
+                if os.path.exists(old): p = old; self.log(f"Opening the previous clip browser: {old}")
+            def done():
+                if p and os.path.exists(p):
+                    self.status("Clip browser opened in your browser.", "")
+                    if C.API_BASE:            # served by us, so the up/down marks can be saved
+                        webbrowser.open(C.API_BASE + "/clips.html")
+                    else:
+                        try: os.startfile(p)
+                        except OSError: webbrowser.open("file:///" + os.path.abspath(p).replace("\\", "/"))
+                else:
+                    self.status("Could not build the clip browser.", "The Log tab has the details.")
+                    messagebox.showerror("KillFeed", "Could not build the clip browser.\n\n"
+                                         + (str(err) if err else "No clips with a file on disk yet.")
+                                         + "\n\nThe Log tab has the details.")
+            self.after(0, done)
+        threading.Thread(target=work, daemon=True).start()
 
     def _tray_update(self):
         if not self.icon or not self.icons: return

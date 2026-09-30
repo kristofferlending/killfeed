@@ -166,7 +166,11 @@ def main():
     def ok(f):
         m = meta(f)
         if not m: return True                     # manual clip without metadata: let it through
+        if int(m.get("rating") or 0) < 0: return False    # marked "never post" in the clip browser
+        if int(m.get("rating") or 0) > 0: return True     # marked "worth posting" - your call beats the rules
         return score_of(f) >= min_score and (m.get("kills", 0) >= min_kills or m.get("vehicles", 0) >= min_vehicles)
+    nixed = [f for f in files if int(meta(f).get("rating") or 0) < 0]
+    if nixed: print(f"{len(nixed)} clip(s) you marked as never-post are skipped.")
     skipped = [f for f in files if not ok(f)]
     files = sorted((f for f in files if ok(f)), key=score_of, reverse=True)
 
@@ -228,33 +232,19 @@ def main():
     wk = cfg.get("weekend_publish_times")
     if A.max is None and wk and datetime.date.today().weekday() in (4, 5, 6):
         limit = max(limit, len(wk))
-    # ---- laering: hent avspillinger for tidligere opplastinger og juster vehicle-vekten ----
-    if yt is not None and cfg.get("analytics_tuning", True):
-        try:
-            up = {k: v for k, v in state["uploaded"].items() if isinstance(v, dict) and v.get("id")}
-            ids = [v["id"] for v in up.values()][-50:]
-            if len(ids) >= 6:
-                r = yt.videos().list(part="statistics", id=",".join(ids)).execute()
-                views = {it["id"]: int(it.get("statistics", {}).get("viewCount", 0)) for it in r.get("items", [])}
-                for k, v in up.items():
-                    m = B.clip_meta(os.path.join(clips_dir, k), L)
-                    v["_veh"] = m.get("vehicles", 0) > 0
-                    v["_views"] = views.get(v["id"], 0)
-                a = [v["_views"] for v in up.values() if v.get("_veh")]
-                b = [v["_views"] for v in up.values() if not v.get("_veh")]
-                if len(a) >= 3 and len(b) >= 3 and sum(b):
-                    ratio = (sum(a) / len(a)) / max(1, sum(b) / len(b))
-                    w = max(2, min(6, round(3 * ratio)))
-                    if w != state.get("veh_weight", 4):
-                        print(f"Learning: vehicle clips get {ratio:.1f}x views on average -> vehicle weight {state.get('veh_weight',4)} -> {w}")
-                    state["veh_weight"] = w
-        except Exception as e:
-            print(f"(analytics skipped: {str(e)[:120]})")
-    vw = max(2, min(6, int(state.get("veh_weight", 3))))
+    # The vehicle weight used to be tuned from view counts here. Removed 28.09.2026: measured over 17
+    # uploads, no weighting of kills, vehicles or distance correlated with views (rank correlation
+    # between -0.36 and +0.09), so the loop was fitting noise and quietly overriding the fixed weights.
+    # Run 9-analyse-channel.cmd and look at the numbers yourself instead; when the channel is large
+    # enough for the signal to be real, this is the place to put it back.
     def rank(f):
+        # one formula only: kf_core and the app score clips the same way, so the queue here is in the
+        # same order as the clip browser shows. Vehicle is worth 2 and that is fixed - see clip_score.
         m = meta(f)
-        r = m.get("kills",0)*2 + m.get("vehicles",0)*vw + (m.get("max_dist_m",0) or 0)//100 - max(0.0, (m.get("len",0) or 0) - 25) * 0.5
+        r = B.killclip.clip_score(m.get("kills", 0), m.get("vehicles", 0),
+                                  m.get("max_dist_m", 0) or 0, m.get("len", 0) or 0)
         if m.get("clamped_start"): r -= 3   # file started mid-action - the kill itself may be missing, rank down
+        if int(m.get("rating") or 0) > 0: r += 100   # you said this one is good: straight to the front
         return r
     files = sorted(files, key=rank, reverse=True)
 

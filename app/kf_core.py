@@ -85,13 +85,18 @@ DEFAULTS = {
     "pause_while_game_running": True,# ikke OCR mens spillet kjører (CPU)
     "game_process_hint": "wardogs",  # delstreng i prosessnavn
     "shorts": {"fps": 2, "pre": 8, "post": 3, "gap": 12, "min": 15, "max": 30,   # analysis 17.09: viewers watch ~17-23 s whatever the length -> keep shorts short
-               "min_kills": 2, "min_vehicles": 1, "fallback_single_when_empty": True},
+               "min_kills": 2, "min_vehicles": 1, "max_kill_span": 10, "fallback_single_when_empty": True,
+               "lonely_gap_s": 15},   # hopp over klipp med ett ensomt kill og ingenting innen N sek (0 = av)
     "dedup_seconds": 5,
     "make_shorts": True,             # lag shorts i det hele tatt (recap-only er mulig)
     "montage": {"enabled": True, "auto": True, "min_minutes": 5, "max_minutes": 10, "pre": 5, "post": 2, "gap": 6,
                 "clip_min": 6, "clip_max": 30, "min_kills": 1, "count_vehicles": True, "lookback_days": 14,
                 "resolution": "1080p", "label": "recap", "title_prefix": "WARDOGS Daily Recap"},
-    "cleanup": {"andre_days": 0},    # 0 = aldri slett noe (alfa-standard)
+    "cleanup": {"andre_days": 0,                 # 0 = aldri slett noe i Other\\ (alfa-standard)
+                "delete_source_after_clip": False,  # slett selve opptaket naar det er ferdig klippet
+                "keep_source_for_recap": True,      # ... men vent til killene er brukt i en recap
+                "recap_bank": True},                # ... eller: ta vare paa recap-bitene, saa trengs ikke opptaket
+    "clip_browser": True,            # skriv clips.html i utmappa (bla gjennom klippene i nettleseren)
     "notify": True,
     "discord_invite": "https://discord.gg/YSRt9t7gq",   # KillFeed-serveren: #feedback, #showcase, #setup-help
     "update_url": "https://github.com/kristofferlending/killfeed/releases",   # "Check for updates" i Advanced
@@ -208,13 +213,21 @@ def source_files(dirs, skip_dir=None, depth=2):
                     out.append(os.path.join(root, f))
     return sorted(set(out), key=os.path.getmtime)
 
+def src_key(path):
+    """The ledger key for a recording. Full path, not the file name: OBS and Aitum Vertical use the same
+    naming scheme, so "2026-09-28 20-15-01.mkv" routinely exists in both the full-format and the vertical
+    folder. Keyed by name they collapse into one entry - the second is never clipped, and the cleanup
+    would look up the wrong entry and delete a recording it never processed."""
+    return os.path.normcase(os.path.abspath(path))
+
 def ready_sources(s, L):
     """Kildefiler som er nye, gamle nok og har stabil størrelse siden forrige skann."""
     files = source_files([s["input_dir"], s.get("vertical_dir") or ""] + list(s.get("extra_input_dirs") or []), skip_dir=s.get("output_dir"))
     now = time.time(); ready = []; sizes = L.setdefault("sizes", {})
     for f in files:
         b = os.path.basename(f)
-        if b in L["processed"] or f in L["processed"]: continue
+        # b is the old key shape - honoured so an existing ledger is not re-clipped from scratch
+        if src_key(f) in L["processed"] or b in L["processed"] or f in L["processed"]: continue
         try:
             st = os.stat(f)
         except OSError: continue
@@ -241,7 +254,8 @@ def process_source(path, s, L, killclip, log=log, stop=None):
     t0 = time.time()
     try:
         segs = killclip.process(path, wd, fps=sh["fps"], pre=sh["pre"], post=sh["post"], gap=sh["gap"],
-                                mn=sh["min"], mx=sh["max"], style=s.get("style", "center"), log=log)
+                                mn=sh["min"], mx=sh["max"], style=s.get("style", "center"),
+                                lonely_gap=sh.get("lonely_gap_s", 0) or 0, log=log)
     except Exception as e:
         if stop and stop():                       # aborted by the user: not an error, leave the file for next time
             log(f"  Aborted {os.path.basename(path)} – will be clipped next time."); return []
@@ -254,12 +268,19 @@ def process_source(path, s, L, killclip, log=log, stop=None):
             hint = "The disk is full."
         else:
             hint = msg[:160]
-        L["processed"][os.path.basename(path)] = {"error": hint, "at": datetime.datetime.now().isoformat()}
+        L["processed"][src_key(path)] = {"file": os.path.basename(path), "error": hint,
+                                         "at": datetime.datetime.now().isoformat()}
         save_ledger(L); log(f"  Skipped {os.path.basename(path)}: {hint}")
         return []
     # rapport (treff + segmenter) tas vare på – montasjen bygger på den
     rep = os.path.join(wd, _basename_noext(path) + "-auto.json")
-    if os.path.exists(rep): shutil.move(rep, os.path.join(REPORTS, os.path.basename(rep)))
+    if os.path.exists(rep):
+        filed = os.path.join(REPORTS, os.path.basename(rep))
+        shutil.move(rep, filed)
+        # recap-banken: smaa 16:9-biter, saa recapen overlever at opptaket slettes
+        if s.get("cleanup", {}).get("recap_bank", True) and s["montage"].get("enabled", True):
+            try: bank_segments(s, filed, killclip, log)
+            except Exception as e: log(f"  recap bank failed: {e}")
     junk = [x for x in segs if not x.get("kills") and not x.get("vehicles")]       # bare assist/penger: ikke verdt en short
     for seg in junk:
         for ext in (".mp4", ".json", ".txt"):
@@ -274,7 +295,8 @@ def process_source(path, s, L, killclip, log=log, stop=None):
                 except OSError: pass
         segs = []
     results = place_clips(segs, wd, s, L, log, killclip)
-    L["processed"][os.path.basename(path)] = {"clips": len(segs), "kept": len([r for r in results if r[1] != "duplicate"]),
+    L["processed"][src_key(path)] = {"file": os.path.basename(path), "hits": len(getattr(killclip, "_last_hits", []) or []),
+                                     "clips": len(segs), "kept": len([r for r in results if r[1] != "duplicate"]),
                                               "at": datetime.datetime.now().isoformat(), "seconds": round(time.time() - t0)}
     save_ledger(L)
     return results
@@ -315,7 +337,353 @@ def _merge_into_kept(kept, seg, killclip, log=log):
     log(f"  kept clip updated from duplicate: {kept['title']}"); return True
 
 def qualifies(seg, sh):
-    return seg.get("kills", 0) >= sh["min_kills"] or seg.get("vehicles", 0) >= sh["min_vehicles"]
+    """A vehicle kill carries a clip on its own. Kills have to be a burst: two kills half a minute
+    apart make a long clip where nothing happens in between, which is the kind nobody watches."""
+    if seg.get("vehicles", 0) >= sh["min_vehicles"]: return True
+    if seg.get("kills", 0) < sh["min_kills"]: return False
+    ev = sorted(seg.get("abs_events") or [])
+    span = (ev[-1] - ev[0]) if len(ev) > 1 else 0
+    return span <= sh.get("max_kill_span", 10)
+
+
+# ---------------------------------------------------------------- clip browser
+API_BASE = ""      # the app sets this to http://127.0.0.1:<port> while its clip server is running
+THUMB_DIR = "thumbs"          # inside the output folder; cached, cheap to rebuild
+CLIP_PAGE = "clips.html"
+
+def _thumb_for(path, dst, killclip, log=log, cache_only=False):
+    """One frame from a third of the way into the clip, 320 px wide. Cached: made once per clip.
+
+    cache_only returns what is already on disk and makes nothing new. Each thumbnail is an ffmpeg call,
+    and while a clipping run is going those calls queue behind it - measured at about four seconds each
+    instead of a fraction of one. With a few hundred clips that turns opening the browser into a
+    twenty-minute wait, so during a run we show the page immediately with the pictures we have."""
+    if os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(path): return True
+    if cache_only: return False
+    try:
+        dur = killclip.duration(path)
+    except Exception:
+        dur = 6.0
+    try:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        subprocess.run([killclip.FFMPEG, "-v", "error", "-y", "-ss", str(round(dur / 3.0, 2)), "-i", path,
+                        "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "7", dst],
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), check=True)
+        return os.path.exists(dst)
+    except Exception as e:
+        log(f"  no thumbnail for {os.path.basename(path)}: {e}"); return False
+
+def clip_page_path(s):
+    return os.path.join(s["output_dir"], CLIP_PAGE)
+
+def set_rating(L, name, rating):
+    """Remember what you thought of a clip: 1 keep, -1 never post, 0 undecided.
+
+    This is the only judgement in the whole pipeline that is not a formula. Measured against the channel,
+    no weighting of kills, vehicles, distance or length predicted views, so the score can order the queue
+    but cannot pick what is worth posting. You can."""
+    c = L.get("clips", {}).get(name)
+    if c is None: return False
+    r = int(rating or 0)
+    if r: c["rating"] = max(-1, min(1, r))
+    else: c.pop("rating", None)
+    save_ledger(L)
+    return True
+
+def write_clip_page(s, L, killclip, log=log, limit=400, make_thumbs=True):
+    """Write a self-contained page listing the clips: picture, title, kills, distance, length.
+    Thumbnails are embedded in the file, so it still works after syncing to a phone."""
+    import base64
+    out = s["output_dir"]
+    if not out or not os.path.isdir(out): return None
+    rows = []; missing = 0
+    snapshot = list(L.get("clips", {}).items())     # a run may be adding clips while we read
+    items = [(k, v) for k, v in snapshot
+             if v.get("status") in ("publiser", "andre") and v.get("path") and os.path.exists(v["path"])]
+    items.sort(key=lambda kv: kv[1].get("at", ""), reverse=True)
+    for name, c in items[:limit]:
+        p = c["path"]
+        th = os.path.join(out, THUMB_DIR, os.path.splitext(name)[0] + ".jpg")
+        img = ""
+        if _thumb_for(p, th, killclip, log, cache_only=not make_thumbs):
+            try: img = "data:image/jpeg;base64," + base64.b64encode(open(th, "rb").read()).decode("ascii")
+            except OSError: img = ""
+        title = c.get("title") or ""
+        if not title:
+            t = os.path.splitext(p)[0] + ".txt"
+            try: title = open(t, encoding="utf-8").read().split("\n")[0]
+            except OSError: title = os.path.splitext(name)[0]
+        if not img: missing += 1
+        rows.append({"name": name, "title": title, "img": img,
+                     "rel": os.path.relpath(p, out).replace("\\", "/"),
+                     "kills": c.get("kills") or 0, "veh": c.get("vehicles") or 0,
+                     "dist": c.get("max_dist_m") or 0, "len": round(float(c.get("len") or 0), 1),
+                     "score": c.get("score") or 0, "at": (c.get("at") or "")[:16].replace("T", " "),
+                     "rating": int(c.get("rating") or 0),
+                     "where": "Publish" if c["status"] == "publiser" else "Other"})
+    page = _CLIP_PAGE_HTML.replace("__DATA__", json.dumps(rows, ensure_ascii=False)) \
+                          .replace("__API__", API_BASE) \
+                          .replace("__MADE__", datetime.datetime.now().strftime("%d.%m.%Y %H:%M"))
+    dst = clip_page_path(s)
+    try:
+        tmp = dst + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f: f.write(page)
+        os.replace(tmp, dst)
+    except OSError as e:
+        log(f"Could not write the clip browser: {e}"); return None
+    log(f"Clip browser: {len(rows)} clips -> {dst}"
+        + (f" ({missing} without a picture yet - they get one when the run is done)" if missing else ""))
+    return dst
+
+_CLIP_PAGE_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KillFeed clips</title>
+<style>
+:root{--bg:#0f0f10;--panel:#18181b;--field:#232326;--fg:#f2f2f2;--muted:#9a9a9a;--gold:#d4af37;--line:#2a2a2e}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1240px;margin:0 auto;padding:0 16px 48px}
+header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:20px 0 6px}
+h1{font-size:20px;letter-spacing:.08em;margin:0;font-weight:800}
+h1 span{color:var(--gold)}
+.made{color:var(--muted);font-size:13px}
+.bar{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0 12px;border-bottom:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input[type=search],select{background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit}
+input[type=search]{flex:1;min-width:180px}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{background:var(--field);color:var(--muted);border:0;padding:8px 14px;font:inherit;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--gold);color:#111;font-weight:700}
+.count{color:var(--muted);font-size:13px;margin-left:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;padding-top:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+.card.up{border-color:var(--gold)}
+.card.down{opacity:.42}
+.rate{display:flex;gap:6px}
+.rate button{flex:0 0 auto;min-width:38px;font-size:15px;line-height:1}
+.rate button[aria-pressed=true]{background:var(--gold);color:#101010;border-color:var(--gold);font-weight:700}
+.saved{color:var(--muted);font-size:12px;margin-left:auto;align-self:center}
+.saved.bad{color:#e0736d}
+.card a.shot{display:block;position:relative;aspect-ratio:9/16;background:#000}
+.card a.shot video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .12s}
+.card a.shot.playing video{opacity:1}
+.card a.shot.playing img{opacity:0}
+.card a.shot .hint{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.6);border-radius:999px;padding:6px 12px;font-size:12px;color:#fff;opacity:0;transition:opacity .12s;pointer-events:none}
+.card a.shot:hover .hint{opacity:1}
+.card a.shot.playing .hint{opacity:0}
+.card img{width:100%;height:100%;object-fit:cover;display:block}
+.noimg{display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:13px}
+.tag{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.72);border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.tag.pub{border-color:var(--gold);color:var(--gold)}
+.len{position:absolute;bottom:8px;right:8px;background:rgba(0,0,0,.72);border-radius:6px;padding:2px 7px;font-size:12px;color:var(--fg)}
+.meta{padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px;flex:1}
+.t{font-size:14px;line-height:1.35}
+.nums{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12.5px;margin-top:auto}
+.nums b{color:var(--gold)}
+.row{display:flex;gap:8px}
+.row button{flex:1;background:var(--field);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:7px;font:inherit;font-size:13px;cursor:pointer}
+.row button:hover{border-color:var(--gold);color:var(--gold)}
+.empty{color:var(--muted);padding:40px 0;text-align:center}
+@media(max-width:560px){.grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}.t{font-size:13px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><h1>KILL<span>FEED</span> clips</h1><div class="made">built __MADE__</div></header>
+
+<div class="bar">
+  <input type="search" id="q" placeholder="Search title or file…" autocomplete="off">
+  <select id="sort">
+    <option value="kills">Most kills</option>
+    <option value="dist">Longest shot</option>
+    <option value="score">Best score</option>
+    <option value="at">Newest</option>
+    <option value="len">Shortest</option>
+  </select>
+  <div class="seg" id="where">
+    <button data-w="Publish" aria-pressed="true">Publish</button>
+    <button data-w="Other" aria-pressed="false">Other</button>
+    <button data-w="all" aria-pressed="false">All</button>
+    <button data-w="up" aria-pressed="false">Marked &#9650;</button>
+    <button data-w="down" aria-pressed="false">Marked &#9660;</button>
+  </div>
+  <div class="count" id="count"></div>
+</div>
+
+<div class="grid" id="grid"></div>
+<div class="empty" id="empty" hidden>Nothing here. Try All, or clear the search.</div>
+</div>
+
+<script>
+const CLIPS = __DATA__;
+const API = "__API__";          // filled in while KillFeed is running; empty in a synced copy of this file
+const $ = s => document.querySelector(s);
+let where = "Publish";
+
+// Marking a clip writes straight back to KillFeed's ledger, so the nightly job sees it: a clip marked
+// down is never uploaded, one marked up goes to the front of the queue.
+async function rate(btn, name, val){
+  const row = btn.closest(".rate"), note = row.querySelector(".saved");
+  const clip = CLIPS.find(c => c.name === name);
+  const next = clip.rating === val ? 0 : val;
+  if (!API){ note.textContent = "open via Browse clips in the app to save"; note.className = "saved bad"; return; }
+  note.textContent = "saving…"; note.className = "saved";
+  try {
+    const r = await fetch(API + "/rate", {method: "POST", headers: {"Content-Type": "application/json"},
+                                          body: JSON.stringify({name: name, rating: next})});
+    if (!r.ok) throw new Error(r.status);
+    clip.rating = next;
+    render();
+  } catch (e) {
+    note.textContent = "could not save – is KillFeed still running?"; note.className = "saved bad";
+  }
+}
+
+function num(c, k){ return k === "len" ? -c.len : (k === "at" ? c.at : c[k]); }
+
+function render(){
+  const q = $("#q").value.trim().toLowerCase();
+  const key = $("#sort").value;
+  const inSet = c => where === "all" ? true
+                   : where === "up" ? c.rating === 1
+                   : where === "down" ? c.rating === -1
+                   : c.where === where;
+  let list = CLIPS.filter(c => inSet(c)
+    && (!q || (c.title + " " + c.name).toLowerCase().includes(q)));
+  list.sort((a, b) => {
+    const x = num(b, key), y = num(a, key);
+    if (x > y) return 1; if (x < y) return -1;
+    return a.at < b.at ? 1 : -1;
+  });
+  $("#count").textContent = list.length + " clip" + (list.length === 1 ? "" : "s");
+  $("#empty").hidden = list.length > 0;
+  $("#grid").innerHTML = list.map(card).join("");
+  wireHover();
+}
+
+function card(c){
+  const shot = c.img ? `<img loading="lazy" src="${c.img}" alt="">` : `<div class="noimg">no preview</div>`;
+  const bits = [];
+  if (c.kills) bits.push(`<span><b>${c.kills}</b> kill${c.kills > 1 ? "s" : ""}</span>`);
+  if (c.veh) bits.push(`<span><b>${c.veh}</b> vehicle${c.veh > 1 ? "s" : ""}</span>`);
+  if (c.dist) bits.push(`<span><b>${c.dist}</b> m</span>`);
+  bits.push(`<span>${c.at}</span>`);
+  const cls = c.rating === 1 ? " up" : (c.rating === -1 ? " down" : "");
+  const url = clipUrl(c);
+  return `<div class="card${cls}">
+    <a class="shot" href="${url}" target="_blank" rel="noopener" data-src="${url}">${shot}<span class="hint">hover to play</span>
+      <span class="tag ${c.where === "Publish" ? "pub" : ""}">${c.where}</span>
+      <span class="len">${c.len}s</span>
+    </a>
+    <div class="meta">
+      <div class="t">${esc(c.title)}</div>
+      <div class="nums">${bits.join("")}</div>
+      <div class="row rate">
+        <button title="Worth posting" aria-pressed="${c.rating === 1}" onclick="rate(this, ${JSON.stringify(c.name).replace(/"/g, "&quot;")}, 1)">&#9650;</button>
+        <button title="Never post this" aria-pressed="${c.rating === -1}" onclick="rate(this, ${JSON.stringify(c.name).replace(/"/g, "&quot;")}, -1)">&#9660;</button>
+        <button onclick="copyTitle(this, ${JSON.stringify(c.title).replace(/"/g, "&quot;")})">Copy title</button>
+        <span class="saved"></span>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Served by KillFeed when it is running, straight off disk otherwise. Both work for playing a clip.
+function clipUrl(c){ return (API ? API + "/clip/" : "") + encodeURI(c.rel); }
+
+// Hover to play. The video element is only made on the first hover and nothing is fetched before that,
+// so a page with a few hundred clips on it stays light until you actually look at one.
+function wireHover(){
+  document.querySelectorAll(".card a.shot").forEach(a => {
+    if (a.dataset.wired) return;
+    a.dataset.wired = "1";
+    let v = null;
+    a.addEventListener("mouseenter", () => {
+      if (!v){
+        v = document.createElement("video");
+        v.muted = true; v.loop = true; v.playsInline = true; v.preload = "none";
+        v.src = a.dataset.src;
+        a.appendChild(v);
+      }
+      try { v.currentTime = 0; } catch (e) {}
+      // Say so when it cannot play rather than doing nothing: a browser without H.264 fails silently
+      // otherwise, and the card just sits there looking broken.
+      v.onerror = () => { const h = a.querySelector(".hint"); if (h) h.textContent = "click to open"; };
+      v.play().then(() => a.classList.add("playing"))
+              .catch(() => { const h = a.querySelector(".hint"); if (h) h.textContent = "click to open"; });
+    });
+    a.addEventListener("mouseleave", () => {
+      if (!v) return;
+      v.pause(); a.classList.remove("playing");
+    });
+  });
+}
+
+function esc(s){ const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+function copyTitle(btn, text){
+  const done = () => { const old = btn.textContent; btn.textContent = "Copied"; setTimeout(() => btn.textContent = old, 1200); };
+  try {
+    navigator.clipboard.writeText(text).then(done, () => fallback(text, done));
+  } catch (e) { fallback(text, done); }
+}
+function fallback(text, done){
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); done(); } catch (e) { prompt("Copy the title:", text); }
+  ta.remove();
+}
+
+$("#q").addEventListener("input", render);
+$("#sort").addEventListener("change", render);
+$("#where").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  where = b.dataset.w;
+  [...$("#where").children].forEach(x => x.setAttribute("aria-pressed", x === b));
+  render();
+});
+render();
+</script>
+</body>
+</html>
+"""
+
+def resort_clips(s, L, log=log):
+    """Re-apply the Publish/Other rule to clips we already have, moving the files to match.
+    Used when the rule itself changes, so a stricter setting cleans up the existing queue
+    instead of only applying to whatever gets clipped next. Returns (to_publish, to_other)."""
+    sh = s["shorts"]
+    out_pub = os.path.join(s["output_dir"], "Publish"); out_andre = os.path.join(s["output_dir"], "Other")
+    moved_pub = moved_other = 0
+    for name, c in L.get("clips", {}).items():
+        if c.get("status") not in ("publiser", "andre"): continue
+        if c.get("fallback"): continue                      # the queue-is-empty pick stays where it is
+        want = "publiser" if qualifies(c, sh) else "andre"
+        if want == c["status"]: continue
+        src = c.get("path") or ""
+        dst_dir = out_pub if want == "publiser" else out_andre
+        if not src or not os.path.exists(src):
+            c["status"] = want; continue                    # file already gone - just fix the ledger
+        try:
+            os.makedirs(dst_dir, exist_ok=True)
+            dst = os.path.join(dst_dir, os.path.basename(src))
+            shutil.move(src, dst)
+            for ext in (".txt", ".json"):
+                t = os.path.splitext(src)[0] + ext
+                if os.path.exists(t): shutil.move(t, os.path.splitext(dst)[0] + ext)
+            c["path"] = dst; c["status"] = want
+            if want == "publiser": moved_pub += 1
+            else: moved_other += 1
+        except OSError as e:
+            log(f"  could not move {name}: {e}")
+    if moved_pub or moved_other:
+        save_ledger(L)
+        log(f"Re-sorted with the current rule: {moved_pub} to Publish, {moved_other} to Other.")
+    return moved_pub, moved_other
 
 def place_clips(segs, wd, s, L, log=log, killclip=None):
     """Dedup mot hovedboka og innbyrdes (beste først), så Publiser/Andre. Duplikater slettes fra disk."""
@@ -422,6 +790,59 @@ def _money(hits, a, b):
                     except ValueError: pass
     return m
 
+BANK = "RecapBank"
+
+def bank_dir(s):
+    return os.path.join(s["output_dir"], BANK)
+
+def bank_segments(s, rep_path, killclip, log=log):
+    """Klipp ut recap-bitene av et opptak som egne smaa filer, og skriv dem inn i rapporten.
+
+    Recapen klippes fra selve opptaket. Et opptak er titalls GB, recap-bitene til sammen under en GB,
+    saa naar bitene ligger trygt kan opptaket slettes uten at recapen mister noe.
+
+    Vi tar vare paa alt som har et kill eller et kjoeretoey i seg - ikke bare det montage.min_kills
+    slipper gjennom naa - for terskelen kan senkes senere, og da er opptaket kanskje borte.
+    Returnerer antall biter som ble lagt i banken."""
+    r = jload(rep_path, {})
+    src = r.get("input")
+    if not src or not os.path.exists(src): return 0
+    if r.get("bank"): return 0                            # allerede banket
+    hits = [(float(t), k) for t, k in r.get("hits", [])]
+    if not hits: return 0
+    m = s["montage"]
+    try:
+        dur, W, H = float(r["duration"]), int(r["width"]), int(r["height"])
+    except (KeyError, TypeError, ValueError):
+        try: dur, W, H = killclip.probe(src)
+        except Exception as e: log(f"  recap bank: could not read {os.path.basename(src)}: {e}"); return 0
+    if H > W: return 0                                    # recapen bruker bare vanlige 16:9-opptak
+    t0 = killclip.file_start_epoch(src, dur)
+    d = bank_dir(s); os.makedirs(d, exist_ok=True)
+    bursts = killclip.event_bursts(hits)
+    base = _basename_noext(src); out = []
+    for i, (a, b, kinds) in enumerate(killclip.cluster(hits, dur, m["pre"], m["post"], m["gap"], m["clip_min"], m["clip_max"]), 1):
+        kills = _waves(hits, a, b, lambda x: x.startswith("KILLCONFIRMED"))
+        veh = _waves(hits, a, b, lambda x: "DESTROYED" in x)
+        if not kills and not veh: continue                # ren assist: ikke verdt plass i banken
+        # samme regel som for shorts: et ensomt enkeltkill uten noe rundt seg bankes heller ikke
+        lg = s["shorts"].get("lonely_gap_s", 0) or 0
+        if lg and killclip.is_lonely_single(hits, a, b, kills, veh, lg, bursts): continue
+        f = os.path.join(d, f"{base}-recap{i:02d}.mp4")
+        if not os.path.exists(f):
+            try:
+                killclip.cut_plain(src, a, b, f)
+            except Exception as e:
+                log(f"  recap bank: {os.path.basename(f)} failed: {e}"); continue
+        out.append({"file": f, "len": round(b - a, 1), "kills": kills, "vehicles": veh,
+                    "money": _money(hits, a, b), "abs": round(t0 + a, 1),
+                    "abs_events": [round(t0 + t, 1) for t, kk in hits if a <= t <= b]})
+    if out:
+        r["bank"] = out; jsave(rep_path, r)
+        mb = sum(os.path.getsize(x["file"]) for x in out if os.path.exists(x["file"])) / 2**20
+        log(f"  recap bank: {len(out)} segment(s), {mb:.0f} MB - the recording is no longer needed for the recap")
+    return len(out)
+
 def montage_candidates(s, L, killclip):
     """Segmenter fra 16:9-opptak (rapporter i REPORTS) som ikke er brukt i en montasje før. Kronologisk."""
     m = s["montage"]; tol = s.get("dedup_seconds", 5)
@@ -431,6 +852,17 @@ def montage_candidates(s, L, killclip):
     for rep in glob.glob(os.path.join(REPORTS, "*-auto.json")):
         r = jload(rep, {})
         src = r.get("input"); hits = [(float(t), k) for t, k in r.get("hits", [])]
+        # banken foerst: da spiller det ingen rolle om selve opptaket er slettet
+        bank = [x for x in (r.get("bank") or []) if os.path.exists(x.get("file", ""))]
+        if bank:
+            for x in bank:
+                if x["abs"] < cutoff: continue
+                if x["kills"] < m["min_kills"] and not (m.get("count_vehicles", True) and x["vehicles"]): continue
+                if any(_same(x["abs_events"], u, tol) for u in used): continue
+                cands.append({"src": x["file"], "a": 0.0, "b": x["len"], "len": x["len"], "kills": x["kills"],
+                              "vehicles": x["vehicles"], "money": x.get("money", 0), "abs": x["abs"],
+                              "abs_events": x["abs_events"]})
+            continue
         if not src or not os.path.exists(src) or not hits: continue
         if r.get("width") and r.get("height") and r.get("duration"):
             dur, W, H = float(r["duration"]), int(r["width"]), int(r["height"])
@@ -584,7 +1016,8 @@ def why_text(row, s):
     parts = [f"{k} kill{'s' if k != 1 else ''}" + (f", {v} vehicle{'s' if v != 1 else ''} destroyed" if v else "")]
     if row["dist"]: parts.append(f"longest {row['dist']} m")
     if row["victims"]: parts.append("victims: " + ", ".join(row["victims"]))
-    rule = f"Publish needs {sh['min_kills']}+ kills or {sh['min_vehicles']}+ vehicles."
+    rule = (f"Publish needs {sh['min_kills']}+ kills within {sh.get('max_kill_span', 10)} s of each other, "
+            f"or {sh['min_vehicles']}+ vehicle kill.")
     if row["where"] == "Publish":
         verdict = "Fallback: best single kill of a session that had no multikill." if row["fallback"] else "Met the rule."
     else:
@@ -592,9 +1025,13 @@ def why_text(row, s):
     return "; ".join(parts) + ".\n" + rule + "\n" + verdict
 
 def forget_source(L, name):
-    """Make KillFeed treat this recording as new on the next run. Existing clips from it are kept in the folders."""
+    """Make KillFeed treat this recording as new on the next run. Existing clips from it are kept in the folders.
+    `name` is a file name; entries are keyed by full path now, so drop every entry whose file matches."""
     n = 0
-    if L["processed"].pop(name, None) is not None: n += 1
+    if L["processed"].pop(name, None) is not None: n += 1          # an old basename-keyed entry
+    for k, v in list(L["processed"].items()):
+        if (v.get("file") or os.path.basename(k)) == name:
+            L["processed"].pop(k, None); L["sizes"].pop(k, None); n += 1
     L["sizes"].pop(name, None)
     for k, v in list(L["clips"].items()):
         if v.get("source") and os.path.basename(v["source"]) == name:
@@ -602,10 +1039,15 @@ def forget_source(L, name):
     save_ledger(L); return n
 
 def delete_outputs(s):
-    """Delete every KillFeed-made file in Publish/Other/Recaps (mp4 + txt). Never touches the user's recordings."""
+    """Delete every KillFeed-made file in Publish/Other/Recaps/RecapBank (mp4 + txt).
+    Never touches the user's recordings."""
+    out = s.get("output_dir") or ""
+    if not out or not os.path.isdir(out):
+        log(f"Not deleting anything: the output folder is not set up ({out!r}).")
+        return 0
     n = 0
-    for sub in ("Publish", "Other", "Recaps"):
-        d = os.path.join(s["output_dir"], sub)
+    for sub in ("Publish", "Other", "Recaps", BANK):
+        d = os.path.join(out, sub)
         for f in glob.glob(os.path.join(d, "*")):
             if f.lower().endswith((".mp4", ".txt")):
                 try: os.remove(f); n += 1
@@ -627,6 +1069,11 @@ def reset_ledger(L):
     """Forget everything: every recording is scanned again next run. Files already in Publish/Other/Recaps are left alone."""
     for k in ("processed", "clips", "sizes"): L[k] = {}
     L["montages"] = []
+    # the recap bank is filled once per report and skipped if it is already there, so a report that keeps
+    # its bank list would never be re-cut - drop the lists so the rescan fills the bank again
+    for rep in glob.glob(os.path.join(REPORTS, "*-auto.json")):
+        r = jload(rep, {})
+        if r.pop("bank", None) is not None: jsave(rep, r)
     save_ledger(L)
 
 # ------------------------------------------------------------------ rydding
@@ -642,6 +1089,52 @@ def cleanup(s, L, log=log):
             c["status"] = "ryddet"
     if n: log(f"Cleanup: removed {n} files from Other\\ older than {days} days."); save_ledger(L)
     return n
+
+def delete_clipped_sources(s, L, killclip, log=log):
+    """Slett opptak som er ferdig klippet, hvis brukeren har bedt om det. Frigjor mye: et opptak er
+    titalls GB, klippene er titalls MB.
+
+    To sperrer, fordi dette ikke kan angres:
+      * bare filer som star i hovedboka UTEN feil - en fil som feilet, eller som ble avbrutt, blir liggende
+      * recapen klipper fra selve opptaket, ikke fra shortsene. Saa lenge keep_source_for_recap star paa,
+        beholdes et opptak til killene er brukt i en recap - ellers ville de forsvunnet ut av recapen.
+    Returnerer (antall, frigjorte bytes)."""
+    c = s.get("cleanup", {})
+    if not c.get("delete_source_after_clip"): return 0, 0
+    pending = set()
+    if c.get("keep_source_for_recap", True):
+        try:
+            # kandidater som allerede kommer fra banken peker paa bank-fila, ikke paa opptaket,
+            # saa et banket opptak havner ikke her og kan slettes med en gang
+            pending = {os.path.normcase(os.path.abspath(x["src"])) for x in montage_candidates(s, L, killclip)}
+        except Exception as e:
+            log(f"Cleanup: could not check what the recap still needs ({e}) - keeping every recording."); return 0, 0
+    n = 0; freed = 0; kept_blind = 0
+    dirs = [s["input_dir"], s.get("vertical_dir") or ""] + list(s.get("extra_input_dirs") or [])
+    for f in source_files(dirs, skip_dir=s["output_dir"]):
+        # only an entry keyed by full path may authorise a delete. An old basename-keyed entry could
+        # belong to a different recording of the same name in another folder.
+        ent = L["processed"].get(src_key(f))
+        if not ent or ent.get("error") or "clips" not in ent: continue      # never clipped, or clipped with an error
+        # Proof that the text reading actually worked on THIS file. A broken Tesseract reads every frame
+        # as empty, which is indistinguishable from a quiet recording - and a quiet recording is exactly
+        # what this function is allowed to delete. So: no hits, no delete. A genuinely uneventful
+        # recording is kept, which is the cheap mistake to make.
+        if not ent.get("hits"):
+            kept_blind += 1; continue
+        if os.path.normcase(os.path.abspath(f)) in pending: continue        # a recap still wants this one
+        try:
+            sz = os.path.getsize(f); os.remove(f)
+            ent["source_deleted"] = datetime.datetime.now().isoformat(); ent["source_bytes"] = sz
+            n += 1; freed += sz
+            log(f"  deleted the recording {os.path.basename(f)} ({sz/2**30:.1f} GB)")
+        except OSError as e:
+            log(f"  could not delete {os.path.basename(f)}: {e}")
+    if kept_blind:
+        log(f"Cleanup: {kept_blind} recording(s) kept - no kill text was read in them. If that is every "
+            f"recording, the text reading is broken rather than the sessions being quiet.")
+    if n: save_ledger(L); log(f"Cleanup: {n} recording(s) deleted, {freed/2**30:.1f} GB freed.")
+    return n, freed
 
 # ------------------------------------------------------------------ én full runde
 def run_once(s, L, killclip, log=log, progress=None, stop=None):
@@ -665,6 +1158,12 @@ def run_once(s, L, killclip, log=log, progress=None, stop=None):
         else: summary["duplicate"] += 1
     if not stopped and s["montage"].get("enabled", True) and s["montage"].get("auto", True):
         summary["montage"] = build_montage(s, L, killclip, log=log)
-    if not stopped: cleanup(s, L, log)
+    if not stopped:
+        cleanup(s, L, log)
+        try: delete_clipped_sources(s, L, killclip, log)
+        except Exception as e: log(f"Cleanup of recordings failed: {e}")
     save_ledger(L)
+    if s.get("clip_browser", True):
+        try: write_clip_page(s, L, killclip, log=log)
+        except Exception as e: log(f"Clip browser failed: {e}")
     return summary

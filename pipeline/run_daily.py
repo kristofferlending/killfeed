@@ -78,7 +78,10 @@ def main():
     if d2:
         L = B.ledger()
         for f in C.source_files([s["input_dir"], s.get("vertical_dir") or ""] + list(s.get("extra_input_dirs") or []), skip_dir=s["output_dir"]):
-            if os.path.basename(f) in L["processed"] and now - os.path.getmtime(f) > d2 * 86400:
+            ent = L["processed"].get(C.src_key(f)) or L["processed"].get(os.path.basename(f))
+            # same two guards as the app: a full-path entry, and proof the text reading worked on this
+            # file. A Tesseract that starts but cannot read makes every recording look empty.
+            if ent and not ent.get("error") and ent.get("hits") and now - os.path.getmtime(f) > d2 * 86400:
                 rm(f, f"fully clipped, older than {d2} d")
 
     # ---- notify: message box only when something is wrong or the queue is empty ----
