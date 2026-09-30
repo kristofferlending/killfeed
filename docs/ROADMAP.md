@@ -1,7 +1,7 @@
 # KillFeed – roadmap
 
 The goal: you double-click once, and from then on finished shorts and recaps appear in a folder
-without you touching anything. Updated 2026-09-20.
+without you touching anything. Updated 2026-09-30.
 
 ## Done (0.3-alpha)
 
@@ -14,6 +14,18 @@ without you touching anything. Updated 2026-09-20.
 - [x] Shorts tuned to what actually gets watched: 15–30 s, 8 s before / 3 s after the kill, long kill runs split at the widest pause
 - [x] Website killfeed.no, Discord server, GitHub Releases as the download place
 
+## Done (0.4-alpha)
+
+- [x] Only the banner under the crosshair can create a kill – no more clips of someone else's kill
+- [x] Two kills in a row counted as two, told apart by the reward printed in the banner
+- [x] Lone kills with nothing near them are not cut at all – three quarters of the clipping work
+- [x] Kills have to be a burst to reach Publish, and changing the rule re-sorts what you already have
+- [x] Clip browser: hover to play, mark clips up or down, and the marks decide what gets uploaded
+- [x] Split framing (whole picture on top, zoomed centre below) for when there is no vertical recording
+- [x] RecapBank – recap pieces kept as small files, so recordings can be deleted without losing recaps
+- [x] Delete recordings once clipped, with guards against deleting when the text reading is broken
+- [x] Reset and start over, and a walkthrough at killfeed.no/guide
+
 ## Closed alpha (now)
 
 - [ ] Feedback from 1080p / 1440p / ultrawide and from infantry players: does the lead-in fit, are kills missed
@@ -25,7 +37,6 @@ without you touching anything. Updated 2026-09-20.
 ## Open beta
 
 - [ ] Code signing (no more SmartScreen warning)
-- [ ] Clear privacy text: everything is local, nothing is sent
 - [ ] Pro version: no watermark, 1440p output, your own logo. License key in the app, no account
 - [ ] Auto-update from the tray
 
