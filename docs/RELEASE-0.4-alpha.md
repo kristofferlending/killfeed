@@ -128,6 +128,18 @@ session. Once a session is in the bank the recording is no longer needed for any
 One button in **Advanced → Maintenance** that throws away every clip KillFeed has made and clips all your
 recordings again with the current settings. Your own recordings are never touched.
 
+## Fixed: a vehicle kill was named and counted twice
+
+Destroying an occupied vehicle fires KILL CONFIRMED and VEHICLE DESTROYED in the same instant. Both were
+counted as separate achievements, so a clip of two vehicle kills was titled *"2 kills, 2 vehicles
+destroyed"* — four things for what the viewer saw happen twice.
+
+It is named once now: that clip is *"2 vehicles destroyed"*. And it is worth 2 in the queue rather than
+3, so a three-kill streak outranks a single vehicle kill instead of tying with it.
+
+The Publish rule still sees both banners, so vehicle clips qualify exactly as before. Clips cut before
+this change are re-titled and re-scored when they are clipped again.
+
 ## Changed: how the queue is ordered
 
 `1 point a kill + 2 a vehicle + 1 per 100 m − half a point a second over 22`. An ordering you can do in

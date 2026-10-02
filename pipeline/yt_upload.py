@@ -102,6 +102,28 @@ def next_slots(times, n, start=None, cfg=None):
         day += 1
     return out
 
+def _note_failure(state, path, err):
+    """Remember that a clip failed, and park it when trying again cannot help.
+
+    YouTube answers 409 "Requested entity already exists" when it believes the video is already on the
+    channel. Retrying that forever would spend one of the day's two upload slots on a clip that can never
+    go through, every night, silently. Quota and 5xx are different - those are worth another go."""
+    name = os.path.basename(path)
+    rec = state.setdefault("failed", {}).setdefault(name, {})
+    rec["at"] = datetime.datetime.now().isoformat()
+    rec["err"] = str(err)[:300]
+    rec["tries"] = int(rec.get("tries") or 0) + 1
+    msg = str(err).lower()
+    if "already exists" in msg or "alreadyexists" in msg:
+        rec["parked"] = True
+        print("   YouTube says this video is already on the channel, so it will not be tried again.")
+        print("   Check the channel for it - including private and scheduled videos. If it is not there,")
+        print(f'   delete "{name}" from "failed" in state.json and it will be picked up on the next run.')
+    elif rec["tries"] >= 3 and "quota" not in msg:
+        rec["parked"] = True
+        print(f"   Failed {rec['tries']} times - parked. Remove it from \"failed\" in state.json to try again.")
+    return rec
+
 def upload(yt, path, title, desc, tags, cfg, publish_at=None):
     from googleapiclient.http import MediaFileUpload
     from googleapiclient.errors import HttpError
@@ -119,8 +141,8 @@ def upload(yt, path, title, desc, tags, cfg, publish_at=None):
     resp, retry = None, 0
     while resp is None:
         try:
-            status, resp = req.next_chunk()
-            if status: print(f"  {int(status.progress()*100)} %", flush=True)
+            prog, resp = req.next_chunk()      # not "status" - that name is the body's status dict above
+            if prog: print(f"  {int(prog.progress()*100)} %", flush=True)
         except HttpError as e:
             if e.resp.status in (500, 502, 503, 504) and retry < 5:
                 retry += 1; time.sleep(2 ** retry); continue
@@ -159,7 +181,7 @@ def main():
     # score fra sidecar-json (killclip): kills*3 + vehicles*4 + $/1000. Beste først, under terskel blir liggende lokalt.
     def score_of(f):
         m = meta(f)
-        return B.killclip.clip_score(m.get("kills", 0), m.get("vehicles", 0), m.get("max_dist_m", 0) or 0, m.get("len", 0) or 0)
+        return B.killclip.clip_score(B.killclip.solo_kills_of(m), m.get("vehicles", 0), m.get("max_dist_m", 0) or 0, m.get("len", 0) or 0)
     min_score = cfg.get("min_score", 0)
     min_kills = cfg.get("min_kills", 2)          # multikill ...
     min_vehicles = cfg.get("min_vehicles", 1)    # ... eller kjoretoy
@@ -188,6 +210,15 @@ def main():
     taken_rng = [r for r in (fname_range(k) for k in state["uploaded"]) if r]
     dups = state.setdefault("duplicate", {})
     files = [f for f in files if os.path.basename(f) not in dups]
+    # A clip that failed in a way retrying cannot fix would otherwise be picked again every night,
+    # fail again, and burn one of the day's upload slots for good.
+    # only the explicit flag - _note_failure decides what is worth another go, and a quota failure is
+    # (it resets every day). Counting tries here as well would park those too.
+    parked = {k for k, v in (state.get("failed") or {}).items()
+              if isinstance(v, dict) and v.get("parked")}
+    if parked:
+        print(f"{len(parked)} clip(s) parked after failing - they are skipped. See \"failed\" in state.json.")
+    files = [f for f in files if os.path.basename(f) not in parked]
     keep = []
     for f in files:                                  # files er sortert beste forst
         ev = abs_ev(f)
@@ -241,7 +272,7 @@ def main():
         # one formula only: kf_core and the app score clips the same way, so the queue here is in the
         # same order as the clip browser shows. Vehicle is worth 2 and that is fixed - see clip_score.
         m = meta(f)
-        r = B.killclip.clip_score(m.get("kills", 0), m.get("vehicles", 0),
+        r = B.killclip.clip_score(B.killclip.solo_kills_of(m), m.get("vehicles", 0),
                                   m.get("max_dist_m", 0) or 0, m.get("len", 0) or 0)
         if m.get("clamped_start"): r -= 3   # file started mid-action - the kill itself may be missing, rank down
         if int(m.get("rating") or 0) > 0: r += 100   # you said this one is good: straight to the front
@@ -267,7 +298,7 @@ def main():
             vid, st = upload(yt, f, title, desc, tags, cfg, when)
         except Exception as e:
             print(f"   ERROR: {e}")
-            state.setdefault("failed", {})[os.path.basename(f)] = {"at": datetime.datetime.now().isoformat(), "err": str(e)[:300]}
+            _note_failure(state, f, e)
             json.dump(state, open(STATE, "w", encoding="utf-8"), indent=1)
             if "quota" in str(e).lower(): print("Quota used up – trying again next run"); break
             continue
@@ -304,7 +335,7 @@ def main():
             vid, st = upload(yt, f, title[:100], desc, tags, cfg, when)
         except Exception as e:
             print(f"   ERROR: {e}")
-            state.setdefault("failed", {})[os.path.basename(f)] = {"at": datetime.datetime.now().isoformat(), "err": str(e)[:300]}
+            _note_failure(state, f, e)
             json.dump(state, open(STATE, "w", encoding="utf-8"), indent=1)
             if "quota" in str(e).lower(): print("Quota used up – trying again next run"); break
             continue

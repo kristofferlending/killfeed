@@ -330,9 +330,25 @@ def is_lonely_single(hits, a, b, kills, veh, gap_s=15.0, bursts=None):
 
 SCORE_FREE_S = 22      # seconds a clip may run before length starts costing it
 
+def solo_kills_of(m):
+    """Kills in this clip that were not a vehicle kill.
+
+    Clips cut before solo_kills existed do not carry it, but the number is recoverable: a kill and the
+    vehicle it destroyed land on the same instant, so they appear as a repeated timestamp in abs_events.
+    Deriving it keeps an old clip and a new one ranked on the same scale in the same queue."""
+    s = m.get("solo_kills")
+    if s is not None: return int(s)
+    ev = m.get("abs_events") or []
+    paired = len(ev) - len(set(ev))
+    return max(0, int(m.get("kills") or 0) - paired)
+
 def clip_score(kills, veh, maxd=0, length=0):
     """Ranking for the upload queue: one point a kill, two a vehicle, one per 100 m, minus half a point
     for every second over SCORE_FREE_S.
+
+    `kills` is kills that were NOT a vehicle kill (see solo_kills_of). A vehicle kill is worth 2, not 3:
+    counting its KILL CONFIRMED banner as well would make one vehicle kill tie with a three-kill streak,
+    and a three-kill streak is the better clip.
 
     It is an ordering you can do in your head, not a prediction. Measured against 17 uploads on the
     ThatsBonkers channel (28.09.2026) no weighting of kills, vehicles or distance correlated with views
@@ -343,10 +359,16 @@ def clip_score(kills, veh, maxd=0, length=0):
     return round(kills * 1 + veh * 2 + (maxd // 100) - max(0.0, (length or 0) - SCORE_FREE_S) * 0.5, 1)
 
 def auto_title(kills, assists, veh, money, when, maxd=0):
-    bits=[]
-    if kills: bits.append(f"{kills} kill{'s' if kills>1 else ''}" + (f" ({maxd} m)" if maxd >= 100 else ""))
-    if veh: bits.append(f"{veh} vehicle{'s' if veh>1 else ''} destroyed")
-    if assists and not kills: bits.append("kill assist")
+    """`kills` here means kills that were NOT a vehicle kill - see solo_kills in _run.
+
+    Destroying an occupied vehicle fires KILL CONFIRMED and VEHICLE DESTROYED in the same instant.
+    Listing both made a clip of two vehicle kills read as "2 kills, 2 vehicles destroyed" - four
+    achievements for something the viewer saw happen twice."""
+    bits=[]; dist = f" ({maxd} m)" if maxd >= 100 else ""
+    if kills:
+        bits.append(f"{kills} kill{'s' if kills>1 else ''}" + dist); dist = ""
+    if veh: bits.append(f"{veh} vehicle{'s' if veh>1 else ''} destroyed" + dist)
+    if assists and not kills and not veh: bits.append("kill assist")
     t = "WARDOGS" + (" – " + ", ".join(bits) if bits else "")
     return (t + " #shorts")[:100]
 
@@ -408,6 +430,11 @@ def _run(A, log=print):
         clamped=a<=0.05 and first_hit<A.pre*0.75   # ville hatt pre-roll, men fila starter midt i action - selve killet kan mangle
         kills,kt=waves(lambda x: x.startswith("KILLCONFIRMED"))
         veh,vt=waves(lambda x: "DESTROYED" in x)
+        # kills and veh stay as the raw banner counts - the Publish rule (min_kills / min_vehicles) is
+        # built on them, and narrowing them here would drop the vehicle clips out of Publish entirely.
+        # The title uses solo_kills instead, so one vehicle kill is named once rather than twice.
+        paired = sum(1 for k in kt if any(abs(k - v) <= 1.5 for v in vt))
+        solo_kills = max(0, kills - paired)
         if A.lonely_gap and is_lonely_single(hits, a, b, kills, veh, A.lonely_gap, bursts):
             log(f"  hoppet over {a:.1f}-{b:.1f}s: ensomt enkeltkill (ingenting innen {A.lonely_gap:.0f} s)")
             continue
@@ -420,8 +447,9 @@ def _run(A, log=print):
               "events":sorted(set(ev)),"kills":kills,"vehicles":veh,"money":money,
               "abs_start":round(t0abs+a,1),"abs_events":[round(t0abs+t,1) for t in sorted(kt+vt)],"clamped_start":clamped,
               "kill_details":details,"max_dist_m":maxd,
-              "score":clip_score(kills,veh,maxd,b-a),
-              "title":auto_title(kills,assists,veh,money,when,maxd)}
+              "score":clip_score(solo_kills,veh,maxd,b-a),
+              "solo_kills":solo_kills,"vehicle_kills":paired,
+              "title":auto_title(solo_kills,assists,veh,money,when,maxd)}
         report["segments"].append(side)
         if not A.dry:
             cut(A.inp,a,b,out,W,H,A.style)

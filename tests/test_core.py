@@ -73,6 +73,34 @@ for _st in ("center", "blur", "stack"):
     assert (_d[1], _d[2]) == (1080, 1920), f"stil {_st} ga {_d[1]}x{_d[2]}"
 print("stiler: center/blur/stack gir alle 1080x1920")
 
+# Et kjoretoy-kill med forer fyrer av KILL CONFIRMED og VEHICLE DESTROYED i samme oyeblikk. Tellingen
+# skal beholde begge (Publiser-regelen bygger paa dem), men tittelen skal nevne hendelsen EN gang.
+assert killclip.auto_title(0, 0, 2, 0, None, 0) == "WARDOGS – 2 vehicles destroyed #shorts"
+assert killclip.auto_title(1, 0, 1, 0, None, 0) == "WARDOGS – 1 kill, 1 vehicle destroyed #shorts"
+assert killclip.auto_title(0, 0, 2, 0, None, 126) == "WARDOGS – 2 vehicles destroyed (126 m) #shorts"
+assert killclip.auto_title(3, 0, 0, 0, None, 0) == "WARDOGS – 3 kills #shorts"
+# Et kjoretoy-kill er verdt 2, ikke 3: teller vi KILL CONFIRMED-banneret i tillegg, blir ett
+# kjoretoy-kill likt en 3-kill streak - og streaken er det bedre klippet.
+_streak = killclip.clip_score(killclip.solo_kills_of({"kills": 3, "vehicles": 0, "abs_events": [1, 2, 3]}), 0, 0, 15)
+_vkill  = killclip.clip_score(killclip.solo_kills_of({"kills": 1, "vehicles": 1, "abs_events": [1, 1]}), 1, 0, 15)
+assert _streak > _vkill, f"3-kill streak ({_streak}) maa slaa ett kjoretoy-kill ({_vkill})"
+# og et gammelt klipp uten solo_kills skal utledes fra de doble tidsstemplene, ikke telles som 3
+assert killclip.solo_kills_of({"kills": 1, "vehicles": 1, "abs_events": [1, 1]}) == 0
+assert killclip.solo_kills_of({"kills": 2, "vehicles": 1, "abs_events": [1, 1, 2]}) == 1
+assert killclip.solo_kills_of({"kills": 3, "solo_kills": 3, "abs_events": [1, 2, 3]}) == 3
+print(f"score: 3-kill streak {_streak} > kjoretoy-kill {_vkill}")
+
+_vk = make("vehkill.mkv", 30, [(10, 12.5, "KILL CONFIRMED"), (10, 12.5, "VEHICLE DESTROYED", _AMT_XY),
+                               (18, 20.5, "KILL CONFIRMED"), (18, 20.5, "VEHICLE DESTROYED", _AMT_XY)])
+_vs = killclip.process(_vk, os.path.join(T, "unit"), fps=2, pre=4, post=3, gap=12, mn=8, mx=30, log=lambda *a: None)
+assert _vs, "kjoretoy-killene skulle gitt et klipp"
+_seg = _vs[0]
+assert _seg["kills"] >= 1 and _seg["vehicles"] >= 1, _seg
+assert _seg["solo_kills"] == 0, f"ingen av killene var rene infanteri-kill: {_seg}"
+assert "kill" not in _seg["title"].split("vehicle")[0], f"tittelen teller kjoretoy-killet to ganger: {_seg['title']}"
+print(f"kjoretoy-kill: kills={_seg['kills']} vehicles={_seg['vehicles']} solo={_seg['solo_kills']} -> {_seg['title']}")
+os.remove(_vk)
+
 # Ensomme enkeltkill skal hoppes over, men et kill sammen med kjoretoyet det odela er ETT oyeblikk
 # med to hendelser - de skal beholdes. (Paa kanalen er 1 kill + 1 kjoretoy de beste klippene.)
 # ROI-en er bare 108 px hoy, saa det er plass til to linjer: banner + andrelinje inne i sona.
@@ -173,6 +201,38 @@ _data = _json.loads(html.split("const CLIPS = ", 1)[1].split(";\n", 1)[0])
 assert len(_data) == sum(1 for v in L["clips"].values() if v.get("status") in ("publiser", "andre")), _data
 assert all(isinstance(r["kills"], int) and r["len"] > 0 for r in _data), _data
 print(f"clips.html: {len(_data)} klipp, {len(html)//1024} KB")
+
+# gamle, feilaktige titler i hovedboka skal ikke vises: sida regner tittel og poeng ut av
+# tellingene selv. Et okkupert kjoretoy ble tidligere skrevet som bade kill og kjoretoy, saa
+# lagret tittel sier "2 kills, 2 vehicles destroyed" der det skjedde to ting.
+_nm = next(k for k, v in L["clips"].items() if v.get("status") in ("publiser", "andre"))
+_bak = dict(L["clips"][_nm])
+L["clips"][_nm].update({"title": "WARDOGS - 9 kills, 9 vehicles destroyed #shorts", "score": 99,
+                        "kills": 2, "vehicles": 2, "solo_kills": 0, "max_dist_m": 0})
+C.write_clip_page(s, L, killclip, log=print, make_thumbs=False)
+_h2 = open(page, encoding="utf-8").read()
+_d3 = _json.loads(_h2.split("const CLIPS = ", 1)[1].split(";\n", 1)[0])
+_row = next(r for r in _d3 if r["name"] == _nm)
+assert _row["title"] == killclip.auto_title(0, 0, 2, 0, None, 0), _row
+assert "2 vehicles destroyed" in _row["title"] and "kills" not in _row["title"], _row
+assert _row["kills"] == 0 and _row["veh"] == 2, _row
+assert _row["score"] != 99, _row
+print("tittel i browseren regnes ut av tellingene:", _row["title"], "| poeng", _row["score"])
+L["clips"][_nm] = _bak
+C.write_clip_page(s, L, killclip, log=print, make_thumbs=False)
+
+# en stoppet kjoering maa aldri se ut som en ferdig kjoering. Dette er feilen som gjorde at en
+# pauset app svarte "Done: 0 ready to publish" paa Run now - rett etter en Reset som hadde slettet
+# alt. Kjoeres her mens opptakene fortsatt ligger der, med en tom hovedbok, og hovedboka paa disk
+# skrives tilbake etterpaa siden run_once lagrer den.
+_L2 = {"processed": {}, "clips": {}, "montages": [], "sizes": {}}
+_rs = C.run_once(s, _L2, killclip, log=lambda *a: None, stop=lambda: True)
+C.save_ledger(L)
+assert _rs["sources"] > 0, "testen er meningsloes uten opptak aa stoppe foran"
+assert _rs["stopped"] is True, _rs
+assert _rs["done"] == 0, _rs
+assert not _rs["publiser"] and not _rs["andre"], _rs
+print(f"stoppet kjoering: {_rs['done']} av {_rs['sources']} gjort, stopped=True - ikke rapportert som ferdig")
 
 # andre runde: ingenting nytt, ingen ny montasje (alt er brukt)
 r2 = C.run_once(s, L, killclip, log=print)

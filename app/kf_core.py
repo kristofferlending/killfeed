@@ -313,7 +313,7 @@ def enrich_from_reports(seg, killclip, tol):
     if not found: return False
     seg["kill_details"] = found; seg["max_dist_m"] = max(x["dist_m"] for x in found)
     seg["score"] = seg.get("score", 0) + seg["max_dist_m"] // 100
-    seg["title"] = killclip.auto_title(seg.get("kills", 0), 0, seg.get("vehicles", 0), seg.get("money", 0), None, seg["max_dist_m"])
+    seg["title"] = killclip.auto_title(seg.get("solo_kills", seg.get("kills", 0)), 0, seg.get("vehicles", 0), seg.get("money", 0), None, seg["max_dist_m"])
     return True
 
 def _merge_into_kept(kept, seg, killclip, log=log):
@@ -326,8 +326,8 @@ def _merge_into_kept(kept, seg, killclip, log=log):
     vic = [x["victim"] for x in seg.get("kill_details", []) if x.get("victim")]
     if vic and len(vic) > len(kept.get("victims") or []): kept["victims"] = vic; changed = True
     if not changed: return False
-    kept["title"] = killclip.auto_title(kept.get("kills", 0), 0, kept.get("vehicles", 0), kept.get("money", 0), None, kept.get("max_dist_m", 0))
-    kept["score"] = killclip.clip_score(kept.get("kills", 0), kept.get("vehicles", 0), kept.get("max_dist_m", 0), kept.get("len", 0))
+    kept["title"] = killclip.auto_title(kept.get("solo_kills", kept.get("kills", 0)), 0, kept.get("vehicles", 0), kept.get("money", 0), None, kept.get("max_dist_m", 0))
+    kept["score"] = killclip.clip_score(killclip.solo_kills_of(kept), kept.get("vehicles", 0), kept.get("max_dist_m", 0), kept.get("len", 0))
     p = kept.get("path", "")
     if p:
         try:
@@ -408,7 +408,20 @@ def write_clip_page(s, L, killclip, log=log, limit=400, make_thumbs=True):
         if _thumb_for(p, th, killclip, log, cache_only=not make_thumbs):
             try: img = "data:image/jpeg;base64," + base64.b64encode(open(th, "rb").read()).decode("ascii")
             except OSError: img = ""
-        title = c.get("title") or ""
+        # Title and score are derived from the counts, never read back from the ledger: clips cut by
+        # an older build have a stored title that counted an occupied vehicle twice ("2 kills, 2
+        # vehicles destroyed" for two vehicle kills). The counts themselves are right, so deriving
+        # here shows the truth without re-cutting anything. Same formula as the nightly upload uses.
+        solo = killclip.solo_kills_of(c)
+        veh = c.get("vehicles") or 0
+        dist = c.get("max_dist_m") or 0
+        length = round(float(c.get("len") or 0), 1)
+        if c.get("kills") is not None:
+            title = killclip.auto_title(solo, 0, veh, 0, None, dist)
+            score = killclip.clip_score(solo, veh, dist, length)
+        else:
+            title = c.get("title") or ""
+            score = c.get("score") or 0
         if not title:
             t = os.path.splitext(p)[0] + ".txt"
             try: title = open(t, encoding="utf-8").read().split("\n")[0]
@@ -416,9 +429,9 @@ def write_clip_page(s, L, killclip, log=log, limit=400, make_thumbs=True):
         if not img: missing += 1
         rows.append({"name": name, "title": title, "img": img,
                      "rel": os.path.relpath(p, out).replace("\\", "/"),
-                     "kills": c.get("kills") or 0, "veh": c.get("vehicles") or 0,
-                     "dist": c.get("max_dist_m") or 0, "len": round(float(c.get("len") or 0), 1),
-                     "score": c.get("score") or 0, "at": (c.get("at") or "")[:16].replace("T", " "),
+                     "kills": solo, "veh": veh,
+                     "dist": dist, "len": length,
+                     "score": score, "at": (c.get("at") or "")[:16].replace("T", " "),
                      "rating": int(c.get("rating") or 0),
                      "where": "Publish" if c["status"] == "publiser" else "Other"})
     page = _CLIP_PAGE_HTML.replace("__DATA__", json.dumps(rows, ensure_ascii=False)) \
@@ -1140,16 +1153,25 @@ def delete_clipped_sources(s, L, killclip, log=log):
 def run_once(s, L, killclip, log=log, progress=None, stop=None):
     """Klipp alt som er klart, dedup, plasser, reserve, montasje. Returnerer oppsummering."""
     files = ready_sources(s, L); save_ledger(L)
-    summary = {"sources": len(files), "publiser": [], "andre": [], "duplicate": 0, "montage": None}
+    summary = {"sources": len(files), "publiser": [], "andre": [], "duplicate": 0, "montage": None,
+               "stopped": False, "done": 0}
     if files: log(f"{len(files)} new recording(s) to go through")
     batch = []
+    n_done = 0
     for n, f in enumerate(files, 1):
-        if stop and stop(): log("Stopped."); break
+        if stop and stop():
+            # Say WHY, and say what is left. "Stopped." on its own after 0 of 16 files looked
+            # like a finished run, which is how a paused app came to report "Done: 0 ready".
+            log(f"Stopped after {n_done} of {len(files)} recording(s) - the rest are clipped next time.")
+            break
         if progress: progress(n, len(files), os.path.basename(f))
         log(f"[{n}/{len(files)}] {os.path.basename(f)}")
         for name, st in process_source(f, s, L, killclip, log, stop=stop):
             batch.append((name, st))
+        n_done += 1
     stopped = bool(stop and stop())
+    summary["stopped"] = stopped
+    summary["done"] = n_done
     fb = promote_fallback(batch, s, L, log)
     for name, st in batch:
         if name == fb: st = "publiser"

@@ -171,16 +171,24 @@ class Tip:
     def _hide(self, _=None):
         if self.tw: self.tw.destroy(); self.tw = None
 
-def choose(parent, title, text, buttons):
-    """Modal dialog with custom buttons: [(label, value), ...]. Returns the chosen value (None if closed)."""
+def choose(parent, title, text, buttons, default=-1):
+    """Modal dialog with custom buttons: [(label, value), ...]. Returns the chosen value (None if closed).
+
+    `default` is the button that gets the gold Primary style and the Enter key, and it is the LAST
+    one by default - which in every dialog here is Cancel. It used to be the first, so the dialog
+    that empties Publish, Other, Recaps and RecapBank had "Start fresh" sitting under Enter."""
     w = tk.Toplevel(parent); w.title(title); w.configure(bg=BG); w.resizable(False, False); w.grab_set(); w.transient(parent)
     out = {"v": None}
     ttk.Label(w, text=title, style="H.TLabel").pack(anchor="w", padx=20, pady=(16, 4))
     ttk.Label(w, text=text, wraplength=460, justify="left").pack(anchor="w", padx=20)
     r = ttk.Frame(w, padding=(20, 16, 20, 16)); r.pack(fill="x")
+    di = default % len(buttons)
     for i, (lbl, val) in enumerate(buttons):
         def go(v=val): out["v"] = v; w.destroy()
-        ttk.Button(r, text=lbl, command=go, style="Primary.TButton" if i == 0 else "TButton").pack(side="left", padx=(0, 8))
+        b = ttk.Button(r, text=lbl, command=go, style="Primary.TButton" if i == di else "TButton")
+        b.pack(side="left", padx=(0, 8))
+        if i == di: b.focus_set(); w.bind("<Return>", lambda e, g=go: g())
+    w.bind("<Escape>", lambda e: w.destroy())
     w.protocol("WM_DELETE_WINDOW", w.destroy)
     w.update_idletasks(); x = parent.winfo_rootx() + (parent.winfo_width() - w.winfo_width()) // 2; y = parent.winfo_rooty() + 120
     w.geometry(f"+{max(0, x)}+{max(0, y)}")
@@ -683,7 +691,12 @@ class App(tk.Tk):
         self.status("Settings saved.", "")
         self._clip_signature = self._sig()
         if before != self._clip_signature and self.L["processed"]:
-            self.rescan_all("You changed how clips are cut. Existing clips were made with the old values.")
+            # A line, not a dialog. Saving a setting should never put a button that deletes every
+            # clip you have in front of the cursor - press "Rescan everything" when you mean it.
+            self.v_saved.set(f"Saved {datetime.datetime.now():%H:%M} - clips you already have used the old values")
+            self.status("Settings saved.", "Existing clips were cut with the old values - press "
+                                           "\u201cRescan everything\u201d below when you want them redone.")
+            self.log("Settings saved - existing clips still have the old values (Rescan everything redoes them).")
 
     def _rule_signature(self):
         """What decides Publish vs Other. Changing this re-sorts the clips we already have."""
@@ -740,7 +753,8 @@ class App(tk.Tk):
                     "Your own recordings are not touched, and videos already on YouTube are left alone – the "
                     "nightly job recognises a kill it has already uploaded even if the clip is cut slightly "
                     "differently this time.\n\n"
-                    "Clipping everything again takes hours. You can keep using the PC while it runs.",
+                    "Clipping everything again takes hours, and until it is done you have no clips at "
+                    "all - the deleting happens first. You can keep using the PC while it runs.",
                     [("Reset and start over", "fresh"), ("Cancel", None)])
         if not ok:
             self.log("Reset cancelled."); return
@@ -1097,7 +1111,14 @@ class App(tk.Tk):
         else: self.run_now()
 
     def run_now(self):
+        """Asking for work means asking for work: lift the pause rather than starting a run that
+        stops on the first file. A paused app used to accept Run now, abort instantly and report
+        "Done: 0 ready to publish" - and after a Reset that left everything deleted and nothing
+        clipped again, which is the worst state this app can be in."""
         if self.busy: return
+        if self.paused:
+            self.toggle_pause()                      # sets paused = False and updates the button
+            self.log("Pause lifted - you asked for a run.")
         threading.Thread(target=self._do_run, daemon=True).start()
 
     def montage_now(self):
@@ -1135,7 +1156,11 @@ class App(tk.Tk):
             r = C.run_once(self.s, self.L, killclip, log=self.log, progress=prog, stop=lambda: self.stop_flag or self.paused or self.stop_req)
             self.progress(0, 1)
             npub, nand = len(r["publiser"]), len(r["andre"])
-            if r["sources"]:
+            if r.get("stopped"):
+                left = r["sources"] - r.get("done", 0)
+                sub = f"{r.get('done', 0)} of {r['sources']} recording(s) done, {left} left for next time"
+                self.status("Stopped before it finished.", sub); self.log(f"Stopped: {sub}.")
+            elif r["sources"]:
                 msg = f"{npub} ready to publish, {nand} in Other" + (f", {r['duplicate']} duplicate(s) removed" if r["duplicate"] else "")
                 self.status("Done.", msg); self.log(f"Done: {msg}.")
                 if self.s.get("notify", True) and (npub or r["montage"]):
