@@ -149,11 +149,45 @@ The vehicle weight used to be tuned automatically from view counts each night. T
 uploads no weighting correlated with views (rank correlation between −0.36 and +0.09), so it was fitting
 noise and quietly overriding the fixed weights.
 
+## Fixed: a paused KillFeed said "Done" instead of "paused"
+
+Pressing *Run now* while paused started a run that stopped on the first file and then reported
+*"Done: 0 ready to publish, 0 in Other"* — which reads exactly like a finished run that found
+nothing. The only clue was a bare *"Stopped."* line in the log.
+
+Two changes. Asking for work now lifts the pause instead of starting a run that cannot do anything,
+and it says so: *"Pause lifted — you asked for a run."* And a run that was interrupted no longer
+borrows the word Done; it says how far it got — *"Stopped before it finished — 3 of 16 recording(s)
+done, 13 left for next time."*
+
+This mattered more than it sounds. *Reset and start over* deletes every clip first and clips again
+afterwards, and it goes through the same Run now path. Paused, it would delete everything and then
+quietly clip nothing — leaving you with no clips, no recap and an empty recap bank, and an app
+reporting that it was done. That combination is no longer reachable.
+
+## Fixed: the dialog that deletes everything had Enter on the wrong button
+
+Both of the app's dialogs put the gold primary style, the keyboard focus and the Enter key on the
+first button. In *Reset and start over* that button is *Reset and start over*. Enter now belongs to
+Cancel in both dialogs, and Escape closes them.
+
+Saving a setting that changes how clips are cut no longer opens that dialog at all. It used to pop
+up on Save with the destructive option under the cursor. Now it is a line of text: your existing
+clips were cut with the old values, and *Rescan everything* redoes them when you want.
+
+## Fixed: wrong titles in the clip browser
+
+The browser read the stored title out of the ledger, so clips cut before the vehicle fix kept
+showing *"2 kills, 2 vehicles destroyed"* for two vehicle kills — 13 of 223 on one real library.
+Title and score are now worked out from the counts when the page is built, the same way the nightly
+upload does it, so they are right without re-cutting anything.
+
 ## Also
 
 Recordings made with audio capture switched off no longer fail as "damaged". Rescan asks before killing
 the file it is working on, instead of after. The clip browser opens in seconds during a run instead of
-twenty minutes. Three status lines stopped printing the literal words "ok" and "warn" at you.
+twenty minutes. Three status lines stopped printing the literal words "ok" and "warn" at you. A stopped run
+no longer claims the recordings it never reached were checked.
 
 ## Known in this alpha
 
