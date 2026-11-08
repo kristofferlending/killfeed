@@ -1,9 +1,13 @@
 # hemmeligheter og tilstand – aldri i git
-client_secret.json
-token.json
-state.json
+client_secret*.json
+token*.json
+token.json*
+*.bak
+state.json*
 processed.json
 config.json
+analysis.json
+analysis.txt
 *.log
 auth.log
 
@@ -11,7 +15,8 @@ auth.log
 build/KillFeed/
 build/tools/
 dist/
-tools/
+tools/ffmpeg/
+pipeline/ffmpeg/
 *.spec
 __pycache__/
 *.pyc
@@ -27,6 +32,7 @@ tests/appdata/
 tests/localappdata/
 tests/rec/
 tests/out/
+tests/frames/
 
 # bot-hemmeligheter
 bot/secrets.txt

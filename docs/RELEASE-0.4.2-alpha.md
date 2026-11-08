@@ -43,12 +43,7 @@ once over the whole recording rather than per clip. Measured over 649 segments f
 in Publish because of the tail. A genuine double kill, and two kills inside the same second told
 apart by the reward amount, both still count correctly.
 
-If you have clips from an earlier build, you do not need to re-cut anything. The clip window is in
-the file name, so the counting can be redone over exactly the window each clip was cut from, from the
-reports alone — seconds instead of the seven hours a full rescan takes. Close KillFeed and run
-`private\fix-counts.cmd`: it re-counts, rewrites the titles and scores, moves the files between
-`Publish\` and `Other\`, and keeps a timestamped backup of the ledger. *Rescan everything* still
-works and does the same thing the slow way.
+If you have clips from an earlier build, *Rescan everything* re-counts and re-sorts them.
 
 ## Fixed: KillFeed cost frames even when it was not clipping
 
@@ -97,89 +92,6 @@ frames. Potentially the largest win of the four.
 It ships off because it depends on your driver and ffmpeg build, and a decode that fails quietly
 would hand the text reading fewer frames and produce fewer clips without saying so. Turn it on, clip
 one recording whose clip count you already know, and compare before trusting it.
-
-## Changed: what gets into Publish is now density, not a count
-
-`min_kills` could not tell a double kill from three unrelated kills spread over a minute and a half,
-because it only counted events in the window. A short called "3 kills" should show three kills that
-belong together.
-
-Publish now needs either two kills within three seconds of each other, or a run of three kills that
-holds a pace of one every five seconds. One kill every five seconds is a good clip; three kills over
-ninety seconds is not, whatever the count says. The thresholds are **`shorts.publish`** in
-`settings.json` — `double_s`, `pace_s`, `pace_need` — and `vehicle_qualifies`, off by default, lets a
-lone vehicle kill through on its own.
-
-`tools/queue_preview.py` rebuilds the whole queue from the reports without reading a frame of video,
-so a threshold can be tried out before anything is cut: `private\queue-preview.cmd`, with
-`--double 5 --need 4 --pace 7` or similar appended.
-
-## New: tell it what actually happened in a clip
-
-The whole threshold discussion had been guesswork, because nobody had checked what the clips really
-contain. *Browse clips* now has **+** and **−** on kills and vehicles and a **✓ correct** button, so
-you can watch a clip and say what happened in it. That makes accuracy something measured rather than
-argued about: `queue-preview.cmd` ends with a report of how often the detector counts right and which
-clips it misses.
-
-The first twelve clips checked this way found the banner-tail bug above in the numbers rather than in
-an argument: it counted one too many on eleven of twelve. With the fix, eleven of twelve are exact.
-The twelfth is a limit of the signal, not a threshold — four kills landed inside one banner and only
-two reward amounts were ever legible.
-
-## Changed: your correction now overrides the detector
-
-Saying what happened in a clip used to change nothing about the clip. It was ground truth for
-measuring the detector and nothing else: the title stayed wrong, the score stayed wrong, and the clip
-stayed in whichever folder the counting had put it in. There was no way to tell that a correction had
-any effect at all, which is a strange thing to ask someone to do twenty-three times.
-
-Now the clip follows what you said. The title, the score, the queue and the folder all take your
-number — in both directions. Say three kills where it counted two and the clip is retitled and moved
-to Publish. Say one kill where it counted two inside three seconds and the "double" was imagined, so
-the clip is retitled and moved out of Publish. Press undo and the detector's own count comes back.
-
-Publish needs timings, and a count has none, so a human-verified count of `pace_need` kills or more
-counts as dense enough: you corrected it upwards because you saw a chain, not four kills spread over
-a minute. Two kills plus a double the detector actually saw in time still qualifies as before.
-
-The card now says what the correction did — "title is now ..., moved to Publish" — instead of
-"saved", and shows what the detector had thought next to your number so the difference stays visible.
-The detector's own count is kept untouched underneath, so the accuracy report still measures the
-detector against you rather than against itself.
-
-## Fixed: labels were lost when you quit
-
-Saying what happened in a clip wrote the answer into the ledger in memory and never to disk, so a
-labelling session survived only until the app closed. It saves on every answer now.
-
-## Fixed: the window never came back from sleep
-
-Going to sleep for the game hides the window. Waking up again did not bring it back — deliberately,
-so it would not jump in front of a game — and the only trace of the app left was a tray icon Windows
-11 hides under the chevron. From the outside it looked like KillFeed had vanished.
-
-It did not even need you to be playing: WARDOGS stays in the process list for a few seconds after you
-close it, so starting KillFeed right after a session was enough. One five-second sweep, and the window
-was gone. Sleep now remembers whether it was the one that hid the window, and if so puts it back in the
-taskbar when the game closes — without taking focus, in case you have something else open. If you had
-put it in the tray yourself, it stays there.
-
-## Changed: text reading starts a few hundred processes instead of tens of thousands
-
-Tesseract was started once per frame — around 130,000 times for a six-hour recording. It also takes a
-list of images and reads them all in one process, writing the pages one after another, which is the
-same work with a fraction of the overhead. A process start is not free on Windows: the Program
-Compatibility Assistant attaches to every single one, and was sitting at 21 % CPU by itself during a
-scan.
-
-Frames are now read 200 at a time. Measured 3.2 times faster over 600 frames, with byte-identical
-text. 200 and not "all of them in one go" because a batch cannot be interrupted part-way, and when a
-game starts KillFeed has to let go of the machine at once — 200 frames is a few seconds. If a future
-Tesseract version ever wrote the page breaks differently, every kill would land at the wrong time with
-nothing looking wrong, so the page count is checked against the frame count and the batch is re-read
-one frame at a time if they disagree.
-
 
 ---
 

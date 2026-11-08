@@ -15,7 +15,7 @@ Ingen opplasting her. Brukeren publiserer fra synkmappa (YouTube-appen på telef
 import os, sys, re, json, glob, time, shutil, tempfile, subprocess, datetime
 
 APP = "KillFeed"
-VERSION = "0.4.2-alpha"
+VERSION = "0.5-alpha"
 CF = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ------------------------------------------------------------------ stier
@@ -367,6 +367,27 @@ def _merge_into_kept(kept, seg, killclip, log=log):
                 f.write(kept["title"] + "\n\n" + ", ".join(f"{x} " for x in kept.get("victims", [])).strip() + "\n")
         except OSError: pass
     log(f"  kept clip updated from duplicate: {kept['title']}"); return True
+
+_RULE_MIN = {"multi_or_veh": (2, 1), "all": (1, 1), "multi_only": (2, 99)}
+
+def rule_choice(sh):
+    """Hvilket av de tre valgene i oppsettet som faktisk gjelder - lest fra shorts.publish.
+
+    Settings-fanen viste valget ut fra min_kills/min_vehicles, som ingenting leser lenger. Skjermen
+    kunne derfor si "Multikill or vehicle destroyed" mens regelen sa nei til kjoeretoey, og et nytt
+    valg der ble lagret et sted ingen saa. Naa leser og skriver begge steder samme felt."""
+    p = sh.get("publish") or {}
+    if float(p.get("double_s", 3.0) or 3.0) >= 8: return "all"
+    return "multi_or_veh" if p.get("vehicle_qualifies") else "multi_only"
+
+def apply_rule_choice(sh, choice):
+    """Skriv et av de tre valgene inn i regelen som faktisk brukes (shorts.publish)."""
+    if choice not in _RULE_MIN: return
+    p = sh.setdefault("publish", {})
+    sh["min_kills"], sh["min_vehicles"] = _RULE_MIN[choice]      # bare for eldre lesere
+    p["vehicle_qualifies"] = (choice == "multi_or_veh")
+    if choice == "all": p["double_s"] = 8.0
+    elif float(p.get("double_s", 3.0) or 3.0) >= 8: p["double_s"] = 3.0
 
 def counts_of(c, killclip):
     """Hva klippet inneholder: DITT svar hvis du har sett det, ellers detektorens telling.

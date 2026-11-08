@@ -345,11 +345,7 @@ class Wizard(tk.Toplevel):
         m["min_minutes"] = max(1, self.v_rmin.get()); m["max_minutes"] = max(m["min_minutes"], self.v_rmax.get())
         # De tre valgene skriver tersklene i shorts.publish. min_kills/min_vehicles beholdes bare
         # fordi wizarden og eldre settings-filer har dem - det er publish som avgjoer.
-        _r = self.v_rule.get()
-        sh["min_kills"], sh["min_vehicles"] = {"multi_or_veh": (2, 1), "all": (1, 1), "multi_only": (2, 99)}[_r]
-        sh.setdefault("publish", {})
-        sh["publish"]["vehicle_qualifies"] = (_r == "multi_or_veh")
-        sh["publish"]["double_s"] = 8.0 if _r == "all" else sh["publish"].get("double_s", 3.0) or 3.0
+        C.apply_rule_choice(sh, self.v_rule.get())
         sh["fallback_single_when_empty"] = self.v_fallback.get()
         s["autostart"] = self.v_auto.get(); s["setup_done"] = True
         try: os.makedirs(s["output_dir"], exist_ok=True)
@@ -501,9 +497,7 @@ class App(tk.Tk):
         self.v_vertdir = tk.StringVar(value=s.get("vertical_dir") or ""); self.v_prefv = tk.BooleanVar(value=s.get("prefer_vertical", True))
         self.v_auto = tk.BooleanVar(value=s.get("autostart", True)); self.v_pause = tk.BooleanVar(value=s.get("pause_while_game_running", True))
         self.v_notify = tk.BooleanVar(value=s.get("notify", True)); self.v_shorts = tk.BooleanVar(value=s.get("make_shorts", True))
-        rule = "multi_or_veh"
-        if s["shorts"]["min_kills"] <= 1: rule = "all"
-        elif s["shorts"]["min_vehicles"] > 10: rule = "multi_only"
+        rule = C.rule_choice(s["shorts"])          # det som faktisk gjelder, ikke et felt ingen leser
         self.v_rule = tk.StringVar(value=rule); self.v_fallback = tk.BooleanVar(value=s["shorts"].get("fallback_single_when_empty", True))
         self.v_style = tk.StringVar(value=s.get("style", "center"))
         self.v_menabled = tk.BooleanVar(value=s["montage"].get("enabled", True)); self.v_mauto = tk.BooleanVar(value=s["montage"].get("auto", True))
@@ -671,7 +665,7 @@ class App(tk.Tk):
         s["vertical_dir"] = self.v_vertdir.get().strip(); s["prefer_vertical"] = self.v_prefv.get()
         s["autostart"] = self.v_auto.get(); s["pause_while_game_running"] = self.v_pause.get(); s["notify"] = self.v_notify.get()
         s["style"] = self.v_style.get(); s["make_shorts"] = self.v_shorts.get()
-        s["shorts"]["min_kills"], s["shorts"]["min_vehicles"] = {"multi_or_veh": (2, 1), "all": (1, 1), "multi_only": (2, 99)}[self.v_rule.get()]
+        C.apply_rule_choice(s["shorts"], self.v_rule.get())   # skriver shorts.publish - det koen faktisk bruker
         s["shorts"]["fallback_single_when_empty"] = self.v_fallback.get()
         s["montage"]["enabled"] = self.v_menabled.get(); s["montage"]["auto"] = self.v_mauto.get()
         s["montage"]["min_minutes"] = max(1, self.v_mmin.get()); s["montage"]["max_minutes"] = max(s["montage"]["min_minutes"], self.v_mmax.get())

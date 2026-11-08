@@ -534,6 +534,21 @@ assert "self.iconify()" in _wake and "self.deiconify()" not in _wake, "vekking m
 assert "gone >= 2" in _appsrc, "vekking skal kreve to nei paa rad"
 print("spillvakt: vekker minimert, og bare etter to nei paa rad")
 
+# Publish-valget: skjermen viser regelen som faktisk gjelder, og et nytt valg skrives dit koen leser.
+# Foer viste Settings "Multikill or vehicle" ut fra min_kills mens regelen sa nei til kjoeretoey,
+# og lagring der skrev til et felt ingenting leste.
+for _ch in ("multi_or_veh", "all", "multi_only"):
+    _sh = {"min_kills": 2, "min_vehicles": 1, "publish": {"double_s": 3, "pace_s": 5, "pace_need": 3, "vehicle_qualifies": False}}
+    C.apply_rule_choice(_sh, _ch)
+    assert C.rule_choice(_sh) == _ch, f"{_ch} gikk ikke tur-retur: {_sh}"
+_sh = {"min_kills": 2, "min_vehicles": 1, "publish": {"double_s": 3, "vehicle_qualifies": False}}
+assert C.rule_choice(_sh) == "multi_only", "min_kills/min_vehicles skal ikke bestemme hva skjermen viser"
+C.apply_rule_choice(_sh, "all"); C.apply_rule_choice(_sh, "multi_or_veh")
+assert _sh["publish"]["double_s"] == 3.0, "aa forlate 'all' skal gi tilbake vanlig dobbel-vindu"
+assert 'C.apply_rule_choice(s["shorts"], self.v_rule.get())' in _appsrc, "Settings maa skrive shorts.publish"
+assert 'C.rule_choice(s["shorts"])' in _appsrc, "Settings maa vise regelen som faktisk gjelder"
+print("publish-valg: Settings viser og skriver samme regel som koen bruker")
+
 # Nattjobben: aldri et vindu som tar fokus, aldri under spill, og tom ko er ikke en feil.
 # En MessageBox herfra tabbet ut et spill 08.11.2026 og kostet en runde.
 import tempfile as _tf, types as _ty, importlib.util as _iu
