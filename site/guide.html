@@ -172,7 +172,13 @@ footer a{color:var(--muted)}
   <h2><span class="n">03</span>The first pass takes hours. That is normal.</h2>
   <p class="sub">Reading text out of video is slow. Everything after the first pass is fast, because each recording is only ever read once.</p>
 
-  <p>Reckon on roughly <b>20 to 30 minutes per hour of recording</b>. A folder with a week of evening sessions in it is an overnight job. You can use the PC normally while it runs — KillFeed waits until the game is closed before it starts, so it never takes CPU mid-match.</p>
+  <p>Reckon on roughly <b>20 to 30 minutes per hour of recording</b>. A folder with a week of evening sessions in it is an overnight job. You can use the PC normally while it runs: ffmpeg and Tesseract run at idle priority, which on Windows also means low disk priority, so they step aside for anything else that wants the machine.</p>
+
+  <p>KillFeed will not start clipping while the game is open, and if you launch the game in the middle of a run it stops within five seconds — the recording it was on is clipped again from the start next time. Reading video is heavy enough that it will take frames off a game if both run at once, so it does not try to share.</p>
+
+  <div class="note">
+    <p><b>If you would rather clip while you play</b>, three values in <code>settings.json</code> control how much of the machine clipping may use. <code>cpu.workers</code> is how many text-reading processes run at once — half your logical CPUs by default. <code>cpu.worker_cores</code> pins the work to chosen cores, which on an Intel 12th-gen or newer means you can put it on the E-cores and leave the P-cores to the game: <code>"16-31"</code>. And <code>cpu.hwaccel: "cuda"</code> moves video decoding to the GPU's own decoder block, which is the single biggest saving — but test it on one recording first and check you get the same number of clips.</p>
+  </div>
 
   <p>After that first pass, a session is clipped in the time it takes to read it once, usually while you are still winding down.</p>
 

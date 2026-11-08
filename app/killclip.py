@@ -18,12 +18,81 @@ Sett miljøvariabel TESSERACT hvis den ikke ligger på standardstedet.
 import sys, os, re, subprocess, json, argparse, tempfile, glob, shutil
 from concurrent.futures import ThreadPoolExecutor
 CF = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # ingen konsollvindu-blink på Windows
+# ffmpeg og tesseract kjoerer under normal prioritet. Windows gir dem da CPU bare naar ingen andre
+# vil ha den, og lar dem likevel bruke alle kjerner naar maskinen staar stille. Det er bedre enn aa
+# binde dem til faste kjerner, som ogsaa ville begrenset dem naar PC-en ikke gjoer noe annet.
+# Prioriteten gjelder bare barneprosessene - selve vinduet blir liggende paa normal, saa GUI-et
+# svarer like raskt midt i en kjoering.
+# IDLE og ikke BELOW_NORMAL: paa Windows gir idle-klassen ogsaa LAV DISK-prioritet, og det er disken
+# som gjoer vondt her. Aa lese et opptak paa 126 GB fyller koen til samme disk spillet streamer fra,
+# og da hakker spillet og innputs henger selv om CPU-en har ledige kjerner. Naar maskinen ellers
+# staar stille faar idle-prosesser alt, saa nattklippingen gaar like fort som foer.
+CF |= getattr(subprocess, "IDLE_PRIORITY_CLASS", 0)
+
+# Hvor mange tesseract-prosesser som kjoerer samtidig. 0 = halvparten av de logiske CPU-ene.
+# Foer sto det os.cpu_count(), altsaa ALLE: paa en i9 er det 24-32 parallelle OCR-prosesser, og det
+# tok rundt 40 bilder i sekundet fra spillet. Tesseract skalerer dessuten daarlig over en viss
+# bredde - disken og minnebaandbredden binder foer kjernene gjoer det - saa halvparten koster lite
+# tid og gir maskinen tilbake til deg.
+WORKERS = 0
+def workers():
+    n = os.cpu_count() or 4
+    return max(2, int(WORKERS) if WORKERS else n // 2)
+
+# Dekod opptaket paa GPU-en i stedet for paa CPU. NVDEC er en egen brikke, ikke de samme
+# shaderne spillet bruker, saa det koster nesten ingen bilder - og software-HEVC-dekoding er det
+# dyreste enkeltleddet i skanningen. Av som standard fordi det avhenger av driver og byggvariant:
+# slaa den paa, kjoer ett opptak, og sammenlign antall klipp med en kjent fil foer du stoler paa den.
+HWACCEL = ""
+
+_FULL_MASK = 0
+def parse_cores(spec, n=None):
+    """"16-31", "8,9,10,11" eller "" -> bitmaske over logiske CPU-er. Tom streng = alle."""
+    if not spec or not str(spec).strip(): return 0
+    n = n or (os.cpu_count() or 64)
+    mask = 0
+    for part in str(spec).replace(" ", "").split(","):
+        if not part: continue
+        try:
+            if "-" in part:
+                a, b = part.split("-", 1); rng = range(int(a), int(b) + 1)
+            else:
+                rng = [int(part)]
+        except ValueError:
+            continue
+        for i in rng:
+            if 0 <= i < n: mask |= 1 << i
+    return mask
+
+def set_affinity(mask):
+    """Bind denne prosessen - og dermed alle ffmpeg/tesseract den starter, som arver masken - til
+    bestemte logiske CPU-er. mask 0 = tilbake til alle.
+
+    Hvorfor paa oss selv og ikke paa hvert barn: tesseract startes titusenvis av ganger og lever
+    noen titalls millisekunder hver gang. Aa sette masken ETTER at prosessen er startet rekker ikke
+    aa bety noe for en saa kort prosess. Arv gjoer det, og koster ingenting.
+    Returnerer True hvis masken ble satt."""
+    global _FULL_MASK
+    if os.name != "nt": return False
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        if not _FULL_MASK:
+            proc = ctypes.c_size_t(); syst = ctypes.c_size_t()
+            if k.GetProcessAffinityMask(k.GetCurrentProcess(), ctypes.byref(proc), ctypes.byref(syst)):
+                _FULL_MASK = syst.value or proc.value
+        want = mask or _FULL_MASK
+        if not want: return False
+        return bool(k.SetProcessAffinityMask(k.GetCurrentProcess(), ctypes.c_size_t(want)))
+    except Exception:
+        return False
 _procs = []   # ffmpeg-prosesser som kjører nå (appen dreper dem ved avslutning)
 ABORT = False  # appen setter True for aa avbryte fila som behandles naa (sjekkes mellom ffmpeg-kall og per OCR-bilde)
 class Aborted(Exception): pass
 def _check_abort():
     if ABORT: raise Aborted("aborted by user")
 def _run_ffmpeg(cmd):
+    require_tools()
     _check_abort()
     p = subprocess.Popen(cmd, creationflags=CF); _procs.append(p)
     try:
@@ -66,7 +135,22 @@ def _find(exe):
     la_pk = os.path.join(la, "Microsoft", "WinGet", "Packages")
     for root, dirs, files in os.walk(la_pk) if os.path.isdir(la_pk) else []:
         if exe + ".exe" in files: return os.path.join(root, exe + ".exe")
-    sys.exit(f"FEIL: fant ikke {exe}.exe. Installer ffmpeg (winget install Gyan.FFmpeg) eller sett FFMPEG_DIR til bin-mappa.")
+    return None      # ikke funnet. IKKE sys.exit her - se require_tools under.
+
+MISSING_TOOL = ("FEIL: fant ikke {exe}.exe. Installer ffmpeg (winget install Gyan.FFmpeg) "
+                "eller sett FFMPEG_DIR til bin-mappa.")
+
+def require_tools():
+    """Sjekk at ffmpeg finnes - foerst naar noe faktisk skal kjoere den.
+
+    Foer sto det sys.exit() rett i _find, paa modulnivaa. Da doede ALT som importerte killclip paa
+    en maskin uten ffmpeg paa PATH - inkludert preflight(), som er laget nettopp for aa si fra om
+    dette paa en vennlig maate, og tools/queue_preview.py, som bare regner paa tall og ikke trenger
+    ffmpeg i det hele tatt. ffmpeg ligger inne i exe-en, saa fra kildekode er det normalt aa ikke
+    ha den."""
+    for name, path in (("ffmpeg", FFMPEG), ("ffprobe", FFPROBE)):
+        if not path: raise RuntimeError(MISSING_TOOL.format(exe=name))
+
 FFMPEG, FFPROBE = _find("ffmpeg"), _find("ffprobe")
 # ROI-er er relative til bildestørrelsen, så de virker på 1080p/1440p/4K og på 9:16-backtracks.
 # Under siktet (KILL CONFIRMED / VEHICLE DESTROYED / +$…): 16:9 → 22 % bredde, 10 % høyde fra (39 %, 71 %).
@@ -151,7 +235,47 @@ def ocr(png):
         raise TesseractFailed(f"tesseract exited {r.returncode}: {msg[-1] if msg else 'no message'}")
     return r.stdout or ""
 
+# Hvor mange bilder som leses av EN tesseract-prosess. Tesseract tar en fillist i stedet for ett
+# bilde, og skriver sidene etter hverandre med sideskift mellom. Det gjoer at prosessen startes
+# noen hundre ganger i stedet for titusener per opptak - og en prosessoppstart er ikke gratis paa
+# Windows: Program Compatibility Assistant hekter seg paa hver eneste en, og laa paa 21 % CPU for
+# seg selv under en skanning. Maalt 2,7 ganger raskere OCR av samme opptak.
+# 200 og ikke "alt i en bunt": en bunt som kjoerer kan ikke avbrytes midt i, og naar spillet starter
+# skal KillFeed slippe maskinen med en gang. 200 bilder er noen sekunder.
+OCR_BATCH = 200
+
+def _ocr_batch(frames):
+    """Les en bunt bilder med en prosess. Returnerer en tekst per bilde, i samme rekkefoelge."""
+    if ABORT or not frames: return [""] * len(frames)
+    lst = frames[0] + ".list"
+    try:
+        with open(lst, "w", encoding="utf-8") as f:
+            f.write("\n".join(frames) + "\n")
+        p = subprocess.Popen([TESS, lst, "-", "--psm", "6"], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, creationflags=CF)
+        _procs.append(p)                      # saa spillvakten kan drepe den sammen med ffmpeg
+        try: out, err = p.communicate()
+        finally:
+            try: _procs.remove(p)
+            except ValueError: pass
+        if ABORT: return [""] * len(frames)
+        if p.returncode != 0:
+            msg = (err or b"").decode("utf-8", "replace").strip().splitlines()
+            raise TesseractFailed(f"tesseract exited {p.returncode}: {msg[-1] if msg else 'no message'}")
+        pages = (out or b"").decode("utf-8", "replace").split("\f")
+        if len(pages) != len(frames):
+            # Antallet MAA stemme: side nr. n ER bilde nr. n, og bildenummeret er tidspunktet
+            # hendelsen faar. Skulle en annen tesseract-versjon skrive sideskiftene annerledes,
+            # ville alle kills blitt forskjoevet i tid uten at noe saa galt ut. Da leser vi heller
+            # bunten bilde for bilde: tregere, men aldri forskjoevet.
+            return [ocr(x) for x in frames]
+        return pages
+    finally:
+        try: os.remove(lst)
+        except OSError: pass
+
 def probe(path):
+    require_tools()
     r = subprocess.run([FFPROBE,"-v","error","-select_streams","v:0","-show_entries","stream=width,height:format=duration","-of","json",path],capture_output=True,text=True,encoding="utf-8",errors="replace",creationflags=CF)
     j = json.loads(r.stdout); st = j["streams"][0]
     return float(j["format"]["duration"]), int(st["width"]), int(st["height"])
@@ -167,15 +291,18 @@ def detect(path, fps, w=None, h=None):
         # én ffmpeg-kjøring, to utganger (én per sone)
         fc = f"[0:v]fps={fps},split={len(rois)}" + "".join(f"[s{i}]" for i in range(len(rois))) + ";" + \
              ";".join(f"[s{i}]{r},{PRE}[o{i}]" for i, r in enumerate(rois))
-        cmd = [FFMPEG,"-v","error","-i",path,"-filter_complex",fc]
+        # -hwaccel maa staa FOER -i: det er et inngangsvalg. Uten -hwaccel_output_format lastes
+        # bildene ned til vanlig minne etterpaa, saa filterkjeden under virker uendret.
+        cmd = [FFMPEG,"-v","error"] + (["-hwaccel",HWACCEL] if HWACCEL else []) + ["-i",path,"-filter_complex",fc]
         for i in range(len(rois)):
             cmd += ["-map",f"[o{i}]","-fps_mode","passthrough",os.path.join(tmp,f"z{i}_%05d.png")]
         _run_ffmpeg(cmd)
         texts = {}
         for i in range(len(rois)):
             frames = sorted(glob.glob(os.path.join(tmp,f"z{i}_*.png")))
-            with ThreadPoolExecutor(max(2, os.cpu_count() or 4)) as ex:
-                texts[i] = list(ex.map(ocr, frames))
+            batches = [frames[j:j+OCR_BATCH] for j in range(0, len(frames), OCR_BATCH)]
+            with ThreadPoolExecutor(workers()) as ex:
+                texts[i] = [t for part in ex.map(_ocr_batch, batches) for t in part]
             _check_abort()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -208,6 +335,7 @@ def detect(path, fps, w=None, h=None):
     detect.feed = feed     # (t, avstand_m, offer) - bare 16:9 har sonen
     detect.money = money   # (t, belop) - HUD oeverst til hoeyre
     detect.reward = _reward_runs(reward)   # (t, belop) - ett innslag per banner som dukket opp
+    detect.reward_raw = reward             # (t, belop) raatt, ett per ramme - se rapporten under
     return _persist(raw)
 
 def cluster(hits, dur, pre, post, gap, mn, mx):
@@ -300,6 +428,87 @@ def summarize(events, hits_in_seg):
     veh = sum(1 for e in events if "DESTROYED" in e)
     return kills, assists, veh, 0
 
+def banner_starts(hits, pred, rruns=(), gap=3.0):
+    """Naar hvert kill SKJEDDE, regnet over hele opptaket - ikke per klippvindu.
+
+    To feller, og begge er maalt paa ekte opptak:
+
+    1) Banneret staar paa i aatte-ni sekunder. Teller man bannerbilder inne i et klippvindu, teller
+       man ogsaa halen av et banner som alt sto der da vinduet aapnet - og det killet skjedde foer
+       klippet begynte. Det ga en short med tittelen "3 kills" der tilskueren ser ett.
+    2) `rruns` (= detect.reward, som allerede er _reward_runs) har ett innslag per banner, og det
+       innslaget ligger som regel ETT TIL TRE SEKUNDER inne i banneret, ikke paa foerste bilde: av
+       531 rader laa 51 paa starten og 144 inne i et banner som alt var talt. Spoer man "kom det en
+       ny beloepssum mellom forrige bilde og dette?" blir hvert banner derfor talt to ganger - 274
+       kills blir til 415.
+
+    Saa: del bildene i sammenhengende bannere (hull stoerre enn `gap` = nytt banner). Hvert banner
+    er ett kill. Har ETT banner flere beloepsrader i seg, er hver ekstra rad et kill til - det er
+    det eneste som avsloerer to kills under sekundet, for banneret blir aldri moerkt mellom dem.
+    Maalt paa fire opptak: 16 av 313 bannere har flere beloep, og det er de ekte dobbelkillene."""
+    ts = sorted(t for t, kk in hits if any(pred(x) for x in kk))
+    if not ts: return []
+    rr = sorted(float(r) for r in (rruns or []))
+    runs = []
+    for t in ts:
+        if runs and t - runs[-1][-1] <= gap: runs[-1].append(t)
+        else: runs.append([t])
+    out = []
+    for run in runs:
+        a, b = run[0], run[-1]
+        out.append(a)                                        # selve banneret
+        inside = [r for r in rr if a - 0.5 <= r <= b + 0.5]
+        out.extend(inside[1:])                               # beloep nr. 2 og utover = flere kills
+    return sorted(out)
+
+def pace_ok(ev, per=5.0, need=3):
+    """Er dette tett nok til aa vaere verdt aa poste?
+
+    En regel, to maater aa snakke om den: "en dobbel pluss noe" og "ett kill hvert femte sekund" er
+    det samme kravet. `need` hendelser teller som tette hvis de ligger innenfor per*(need-1)
+    sekunder - tre kills innen ti sekunder, fire innen femten. Et dobbelkill pluss ett mer passerer,
+    tre spredte kills over nitti sekunder gjoer det ikke.
+
+    ev er tidspunkt for kills og kjoeretoey-kills i klippet, sortert. Returnerer (ok, tetteste).
+    `tetteste` er flest hendelser funnet innenfor vinduet, slik at den kan brukes i poengscoren."""
+    ev = sorted(ev)
+    if len(ev) < need: return False, len(ev)
+    win = per * (need - 1)
+    best = 0
+    for i in range(len(ev)):
+        n = sum(1 for x in ev[i:] if x <= ev[i] + win)
+        best = max(best, n)
+    return best >= need, best
+
+def collapse_pairs(kill_starts, veh_starts, within=1.5):
+    """Hendelseslista slik tilskueren ser den: ett oeyeblikk = en hendelse.
+
+    Et okkupert kjoeretoey fyrer KILL CONFIRMED og VEHICLE DESTROYED i samme sekund. Det er EN ting
+    som skjer, men to bannere - og et tetthetsmaal som teller bannere leser det som et dobbelkill.
+    Det er samme feil som ga titler paa "2 kills, 2 vehicles destroyed", bare flyttet inn i
+    Publiser-regelen. Her slaas paret sammen til en hendelse foer tettheten maales."""
+    out = list(veh_starts)
+    for t in kill_starts:
+        if not any(abs(t - v) <= within for v in veh_starts): out.append(t)
+    return sorted(out)
+
+def worth_posting(ev, double_s=3.0, pace_s=5.0, pace_need=3):
+    """Publiser-regelen: enten et ekte dobbelkill, eller et tempo paa ett kill hvert pace_s sekund.
+
+    To ting, fordi de er to forskjellige gode oeyeblikk:
+      * to hendelser innenfor double_s - banneret rekker ikke bli moerkt, det ser ut som ett sloss
+      * pace_need hendelser innenfor pace_s*(pace_need-1) - en rekke som holder tempoet oppe
+    Tre spredte enkeltkills passerer ingen av dem, uansett hvor mange de er. Det var hele poenget:
+    en short som heter "3 kills" skal vise tre kills som hoerer sammen, ikke tre tilfeldige.
+
+    Returnerer (ok, tetteste, hvorfor)."""
+    ev = sorted(ev)
+    dbl, dn = pace_ok(ev, per=double_s, need=2)
+    pac, pn = pace_ok(ev, per=pace_s, need=pace_need)
+    if dbl: return True, max(dn, pn), "double"
+    if pac: return True, max(dn, pn), "pace"
+    return False, max(dn, pn), ""
+
 def event_bursts(hits, within=3.0):
     """The moments something happened, grouped. A kill and the vehicle it destroyed fire together and are
     one moment, not two. Returns the start time of each burst."""
@@ -363,11 +572,15 @@ def auto_title(kills, assists, veh, money, when, maxd=0):
 
     Destroying an occupied vehicle fires KILL CONFIRMED and VEHICLE DESTROYED in the same instant.
     Listing both made a clip of two vehicle kills read as "2 kills, 2 vehicles destroyed" - four
-    achievements for something the viewer saw happen twice."""
-    bits=[]; dist = f" ({maxd} m)" if maxd >= 100 else ""
-    if kills:
-        bits.append(f"{kills} kill{'s' if kills>1 else ''}" + dist); dist = ""
-    if veh: bits.append(f"{veh} vehicle{'s' if veh>1 else ''} destroyed" + dist)
+    achievements for something the viewer saw happen twice.
+
+    `maxd` is kept in the signature and in the clip's data, but no longer appears in the title. The
+    distance came from the kill feed down the left side, which is cropped away in a 9:16 short - so a
+    title said "(161 m)" about something the viewer cannot see, and nothing on screen confirms it.
+    It still sorts the browser (Longest shot) and still counts in the score."""
+    bits=[]
+    if kills: bits.append(f"{kills} kill{'s' if kills>1 else ''}")
+    if veh: bits.append(f"{veh} vehicle{'s' if veh>1 else ''} destroyed")
     if assists and not kills and not veh: bits.append("kill assist")
     t = "WARDOGS" + (" – " + ", ".join(bits) if bits else "")
     return (t + " #shorts")[:100]
@@ -401,11 +614,29 @@ def _run(A, log=print):
     cash=getattr(detect,"money",[]) or []
     t0abs=file_start_epoch(A.inp,dur)
     segs=cluster(hits,dur,A.pre,A.post,A.gap,A.min,A.max)
+    # Naar hvert kill skjedde, regnet EN gang over hele opptaket. Maa gjoeres her og ikke per vindu:
+    # et banner som alt sto paa skjermen da vinduet aapnet hoerer til klippet foer, ikke dette.
+    _rr_all=[t for t,_ in (getattr(detect,"reward",None) or [])]
+    _kill_starts=banner_starts(hits, lambda x: x.startswith("KILLCONFIRMED"), _rr_all)
+    _veh_starts=banner_starts(hits, lambda x: "DESTROYED" in x, _rr_all)
     bursts=event_bursts(hits)
     base=os.path.splitext(os.path.basename(A.inp))[0]
     when = (re.search(r"(\d{4})-(\d{2})-(\d{2})", base) or [None,"","",""])
     os.makedirs(A.outdir,exist_ok=True)
+    # reward MAA ligge i rapporten. Beloepssummen i banneret er det eneste som skiller to raske kills
+    # fra ett - banneret blir aldri moerkt mellom dem - og uten den i rapporten kan ingenting
+    # etterpaa se et dobbelkill. Det gjorde at minste maalte avstand mellom to kill i seks oekter
+    # var 6,5 sekunder, som er en egenskap ved metoden og ikke ved spillingen.
+    # reward_raw og money ER tellingen vi ikke har hatt. `reward` er ferdig behandlet - ett innslag
+    # per banner - og den behandlingen kaster nettopp det som skiller to kills: banneret viser TO tall
+    # paa samme sted, beloepet for killet og en loepende sum, og summen stiger for hvert kill uansett
+    # hva killet var verdt. Uten raatallene kan ingen regne om tellingen etterpaa, og uten pengeteller-
+    # en oeverst til hoeyre (`money`, som ble lest og kastet) finnes ingen uavhengig kontroll. Begge
+    # koster noen kilobyte i rapporten og sparer en omskanning paa timer hver gang regelen skal proeves.
     report={"input":A.inp,"duration":dur,"width":W,"height":H,"hits":[(t,k) for t,k in hits],
+            "reward":[(t,a) for t,a in (getattr(detect,"reward",None) or [])],
+            "reward_raw":[(t,a) for t,a in (getattr(detect,"reward_raw",None) or [])],
+            "money":[(t,a) for t,a in cash],
             "feed":[{"t":t,"abs":round(t0abs+t,1),"dist_m":d,"victim":v} for t,d,v in feed],"segments":[]}
     for i,(a,b,k) in enumerate(segs,1):
         name=f"{base}-auto{i:02d}-{a:05.1f}-{b:05.1f}.mp4"
@@ -415,21 +646,16 @@ def _run(A, log=print):
             if a<=t<=b: ev+=kk
         kills,assists,veh,_=summarize(sorted(set(ev)),None)
         money=max((c for t,c in cash if a<=t<=b), default=0)
-        rruns=[t for t,_ in (getattr(detect,"reward",None) or []) if a-1<=t<=b+1]
-        def waves(pred):
-            """Count banners, not frames. A new one either follows a pause of >3 s, or is a new reward
-            amount appearing while the previous banner is still on screen (two kills within a second)."""
-            ts=[t for t,kk in hits if a<=t<=b and any(pred(x) for x in kk)]
-            n=0; last=-99; starts=[]
-            for t in ts:
-                fresh = any(last < r <= t for r in rruns) if last>-99 else False
-                if t-last>3 or fresh: n+=1; starts.append(t)
-                last=t
-            return n, starts
+        def waves(pred, allstarts):
+            """Bare kills som BEGYNTE inne i vinduet. Startene er regnet over hele opptaket, saa et
+            banner som alt sto paa skjermen da vinduet aapnet teller ikke her - det killet hoerer til
+            klippet foer dette."""
+            starts=[t for t in allstarts if a<=t<=b]
+            return len(starts), starts
         first_hit=min((t for t,_ in hits if a<=t<=b),default=a)
         clamped=a<=0.05 and first_hit<A.pre*0.75   # ville hatt pre-roll, men fila starter midt i action - selve killet kan mangle
-        kills,kt=waves(lambda x: x.startswith("KILLCONFIRMED"))
-        veh,vt=waves(lambda x: "DESTROYED" in x)
+        kills,kt=waves(lambda x: x.startswith("KILLCONFIRMED"), _kill_starts)
+        veh,vt=waves(lambda x: "DESTROYED" in x, _veh_starts)
         # kills and veh stay as the raw banner counts - the Publish rule (min_kills / min_vehicles) is
         # built on them, and narrowing them here would drop the vehicle clips out of Publish entirely.
         # The title uses solo_kills instead, so one vehicle kill is named once rather than twice.

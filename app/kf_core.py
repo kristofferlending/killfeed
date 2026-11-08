@@ -15,7 +15,7 @@ Ingen opplasting her. Brukeren publiserer fra synkmappa (YouTube-appen på telef
 import os, sys, re, json, glob, time, shutil, tempfile, subprocess, datetime
 
 APP = "KillFeed"
-VERSION = "0.4.1-alpha"
+VERSION = "0.4.2-alpha"
 CF = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ------------------------------------------------------------------ stier
@@ -83,9 +83,15 @@ DEFAULTS = {
     "watch_interval_s": 60,          # hvor ofte opptaksmappa sjekkes
     "min_file_age_s": 120,           # ikke rør filer som fortsatt skrives
     "pause_while_game_running": True,# ikke OCR mens spillet kjører (CPU)
-    "game_process_hint": "wardogs",  # delstreng i prosessnavn
+    "game_process_hint": "wardogs",   # flere gaar an: "wardogs, cs2, premiere" - komma mellom  # delstreng i prosessnavn
     "shorts": {"fps": 2, "pre": 8, "post": 3, "gap": 12, "min": 15, "max": 30,   # analysis 17.09: viewers watch ~17-23 s whatever the length -> keep shorts short
-               "min_kills": 2, "min_vehicles": 1, "max_kill_span": 10, "fallback_single_when_empty": True,
+               "min_kills": 2, "min_vehicles": 1, "fallback_single_when_empty": True,
+               # Hva som faar lov til aa havne i Publish. Tetthet, ikke antall: tre spredte
+               # enkeltkills er ikke en short, et dobbelkill er det.
+               "publish": {"double_s": 3,          # to hendelser innenfor saa mange sekunder = dobbelkill
+                           "pace_s": 5,            # ... eller et tempo paa ett kill hvert N sekund
+                           "pace_need": 3,         # ... holdt over saa mange hendelser (3 innen 10 s)
+                           "vehicle_qualifies": False},   # True: et enslig kjoeretoey-kill slipper gjennom alene
                "lonely_gap_s": 15},   # hopp over klipp med ett ensomt kill og ingenting innen N sek (0 = av)
     "dedup_seconds": 5,
     "make_shorts": True,             # lag shorts i det hele tatt (recap-only er mulig)
@@ -96,6 +102,14 @@ DEFAULTS = {
                 "delete_source_after_clip": False,  # slett selve opptaket naar det er ferdig klippet
                 "keep_source_for_recap": True,      # ... men vent til killene er brukt i en recap
                 "recap_bank": True},                # ... eller: ta vare paa recap-bitene, saa trengs ikke opptaket
+    # Hvilke logiske CPU-er klippingen faar bruke. Tom streng = alle, som er riktig for de fleste:
+    # ffmpeg og tesseract kjoerer alt under normal prioritet, saa de viker for spill og andre
+    # programmer av seg selv, og med alle kjerner blir de fortere ferdige naar PC-en staar stille.
+    # Paa en hybrid-CPU (Intel 12. gen og nyere) kan det likevel vaere verdt aa legge klippingen paa
+    # E-kjernene: "16-31" eller "8,9,10,11". Da staar P-kjernene fritt for spillet.
+    "cpu": {"worker_cores": "",      # "" = alle. "16-31" legger klippingen paa E-kjernene.
+            "workers": 0,            # 0 = halvparten av de logiske CPU-ene. Var alle, og det kostet ~40 fps.
+            "hwaccel": ""},          # "cuda" = dekod opptaket paa GPU. Test paa ett opptak foerst.
     "clip_browser": True,            # skriv clips.html i utmappa (bla gjennom klippene i nettleseren)
     "notify": True,
     "discord_invite": "https://discord.gg/YSRt9t7gq",   # KillFeed-serveren: #feedback, #showcase, #setup-help
@@ -187,12 +201,30 @@ def save_ledger(L): jsave(LEDGER, L)
 
 # ------------------------------------------------------------------ verktøy
 def game_running(hint):
+    """Kjoerer noe vi skal holde oss unna? hint kan vaere flere navn med komma mellom:
+    "wardogs, cs2, helldivers" - saa KillFeed kan sove for alt som tar maskinen, ikke bare WARDOGS."""
     if os.name != "nt" or not hint: return False
+    names = [x.strip().lower() for x in str(hint).replace(";", ",").split(",") if x.strip()]
+    if not names: return False
     try:
         r = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=CF, timeout=10)
-        return hint.lower() in (r.stdout or "").lower()
+        out = (r.stdout or "").lower()
+        return any(n in out for n in names)
     except Exception:
-        return False
+        # Ukjent er IKKE det samme som "spillet er lukket". En tasklist som henger under tung last
+        # ville ellers sett ut som at spillet nettopp ble avsluttet - og da vaakner KillFeed midt i
+        # en runde. None = vet ikke; kallerne behandler det som "kan fortsatt kjoere".
+        return None
+
+def should_hold_for_game(s, busy, game_on, already_held=False):
+    """Skal en kjoering som ALLEREDE er i gang stoppe fordi spillet er startet?
+
+    Ligger her, og ikke inne i GUI-klassen, nettopp fordi den hoerte hjemme i GUI-et foer og derfor
+    aldri ble testet. pause_while_game_running satt bare i vaktloekka, som avgjoer om en NY kjoering
+    skal starte - saa en kjoering som var i gang klippet videre gjennom hele spilleoekta. Alt som kan
+    svare paa et sporsmaal med ja eller nei skal ligge et sted en test kommer til."""
+    if not s.get("pause_while_game_running", True): return False
+    return bool(game_on) and bool(busy) and not already_held
 
 _CLIP_RE = re.compile(r"-auto\d\d-\d", re.I)
 def source_files(dirs, skip_dir=None, depth=2):
@@ -336,14 +368,47 @@ def _merge_into_kept(kept, seg, killclip, log=log):
         except OSError: pass
     log(f"  kept clip updated from duplicate: {kept['title']}"); return True
 
+def counts_of(c, killclip):
+    """Hva klippet inneholder: DITT svar hvis du har sett det, ellers detektorens telling.
+
+    Ett sted, saa tittelen, poengsummen, koen og opplastingen ikke kan si tre forskjellige ting om
+    samme klipp. Returnerer (kills, kjoeretoey, sagt_av_menneske)."""
+    t = c.get("truth") or {}
+    if t:
+        return int(t.get("kills") or 0), int(t.get("vehicles") or 0), True
+    return killclip.solo_kills_of(c), int(c.get("vehicles") or 0), False
+
 def qualifies(seg, sh):
-    """A vehicle kill carries a clip on its own. Kills have to be a burst: two kills half a minute
-    apart make a long clip where nothing happens in between, which is the kind nobody watches."""
-    if seg.get("vehicles", 0) >= sh["min_vehicles"]: return True
-    if seg.get("kills", 0) < sh["min_kills"]: return False
-    ev = sorted(seg.get("abs_events") or [])
-    span = (ev[-1] - ev[0]) if len(ev) > 1 else 0
-    return span <= sh.get("max_kill_span", 10)
+    """Skal dette klippet til Publish? Tetthet avgjoer, ikke antall.
+
+    min_kills telte bare hvor mange hendelser klippet hadde, og kunne derfor ikke skille et
+    dobbelkill fra tre tilfeldige enkeltkills spredt over halvannet minutt. En short som heter
+    "3 kills" skal vise tre kills som hoerer sammen.
+
+    Terskler i settings.json under shorts.publish - double_s, pace_s, pace_need,
+    vehicle_qualifies. Maalt paa fire opptak slipper standarden gjennom rundt 3 klipp per opptak,
+    og alle er ekte dobbelkills."""
+    import killclip
+    p = sh.get("publish") or {}
+    # Ett oeyeblikk = en hendelse: et okkupert kjoeretoey fyrer kill og kjoeretoey i samme sekund,
+    # og ligger derfor som samme tidspunkt to ganger i abs_events.
+    ev = sorted(set(seg.get("abs_events") or []))
+    ok, _tight, why = killclip.worth_posting(ev, p.get("double_s", 3.0),
+                                             p.get("pace_s", 5.0), p.get("pace_need", 3))
+    need = int(p.get("pace_need", 3))
+    t = seg.get("truth") or {}
+    if t:
+        # Du har sett klippet. Da gjelder ditt tall, ogsaa naar det gjoer klippet daarligere enn
+        # detektoren trodde: sier du ett kill, har tetthetsmaalingen maalt et banner som ikke var
+        # to kills, og da er "dobbel" en innbilt dobbel.
+        k, v = int(t.get("kills") or 0), int(t.get("vehicles") or 0)
+        if k >= need: return True                       # en kjede du har sett med egne oeyne
+        if k >= 2 and why == "double": return True      # to kills, og detektoren saa dem tett
+        if p.get("vehicle_qualifies", False) and v >= 1: return True
+        return False
+    if ok: return True
+    if p.get("vehicle_qualifies", False) and seg.get("vehicles", 0) >= 1: return True
+    return False
 
 
 # ---------------------------------------------------------------- clip browser
@@ -375,6 +440,40 @@ def _thumb_for(path, dst, killclip, log=log, cache_only=False):
 
 def clip_page_path(s):
     return os.path.join(s["output_dir"], CLIP_PAGE)
+
+def set_truth(L, name, kills=None, vehicles=None, confirm=None):
+    """Hva som FAKTISK skjedde i klippet, sagt av et menneske som har sett det.
+
+    Hele terskeldiskusjonen har vaert gjetning fordi ingen har verifisert hva som skjer i klippene.
+    Med fasit kan treffsikkerheten maales i stedet for resonneres fram: hvor ofte teller detektoren
+    riktig, og hvilke klipp bommer den paa. Det er ogsaa det eneste som kan si om en terskel er for
+    streng eller for slapp.
+
+    Tre tilstander per klipp, og forskjellen mellom dem er poenget:
+      ingen        - ikke sett paa enda
+      confirm      - sett, og detektoren har rett (lagres, saa "ikke sett" og "riktig" ikke blandes)
+      kills/veh    - sett, og det riktige tallet er dette
+
+    Returnerer True hvis klippet finnes."""
+    c = L.get("clips", {}).get(name)
+    if c is None: return False
+    if confirm:
+        c["truth"] = {"kills": int(c.get("solo_kills") if c.get("solo_kills") is not None else (c.get("kills") or 0)),
+                      "vehicles": int(c.get("vehicles") or 0), "confirmed": True,
+                      "at": datetime.datetime.now().isoformat(timespec="seconds")}
+    elif kills is None and vehicles is None:
+        c.pop("truth", None)                                  # angret: tilbake til "ikke sett paa"
+    else:
+        t = dict(c.get("truth") or {})
+        if kills is not None: t["kills"] = max(0, int(kills))
+        if vehicles is not None: t["vehicles"] = max(0, int(vehicles))
+        t["confirmed"] = False
+        t["at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        c["truth"] = t
+    # Skriv til disk med en gang, som set_rating gjoer. Uten dette laa merkingen bare i minnet og
+    # forsvant naar appen ble avsluttet - en time med klipping sett igjennom, borte uten en lyd.
+    save_ledger(L)
+    return True
 
 def set_rating(L, name, rating):
     """Remember what you thought of a clip: 1 keep, -1 never post, 0 undecided.
@@ -412,11 +511,10 @@ def write_clip_page(s, L, killclip, log=log, limit=400, make_thumbs=True):
         # an older build have a stored title that counted an occupied vehicle twice ("2 kills, 2
         # vehicles destroyed" for two vehicle kills). The counts themselves are right, so deriving
         # here shows the truth without re-cutting anything. Same formula as the nightly upload uses.
-        solo = killclip.solo_kills_of(c)
-        veh = c.get("vehicles") or 0
+        solo, veh, _human = counts_of(c, killclip)
         dist = c.get("max_dist_m") or 0
         length = round(float(c.get("len") or 0), 1)
-        if c.get("kills") is not None:
+        if c.get("kills") is not None or c.get("truth"):
             title = killclip.auto_title(solo, 0, veh, 0, None, dist)
             score = killclip.clip_score(solo, veh, dist, length)
         else:
@@ -430,9 +528,12 @@ def write_clip_page(s, L, killclip, log=log, limit=400, make_thumbs=True):
         rows.append({"name": name, "title": title, "img": img,
                      "rel": os.path.relpath(p, out).replace("\\", "/"),
                      "kills": solo, "veh": veh,
+                     # det detektoren selv kom til, saa kortet kan vise forskjellen mellom hva
+                     # maskinen trodde og hva du saa - uten den er de to tallene alltid like
+                     "det_kills": killclip.solo_kills_of(c), "det_veh": int(c.get("vehicles") or 0),
                      "dist": dist, "len": length,
                      "score": score, "at": (c.get("at") or "")[:16].replace("T", " "),
-                     "rating": int(c.get("rating") or 0),
+                     "rating": int(c.get("rating") or 0), "truth": c.get("truth") or None,
                      "where": "Publish" if c["status"] == "publiser" else "Other"})
     page = _CLIP_PAGE_HTML.replace("__DATA__", json.dumps(rows, ensure_ascii=False)) \
                           .replace("__API__", API_BASE) \
@@ -479,6 +580,15 @@ input[type=search]{flex:1;min-width:180px}
 .rate button{flex:0 0 auto;min-width:38px;font-size:15px;line-height:1}
 .rate button[aria-pressed=true]{background:var(--gold);color:#101010;border-color:var(--gold);font-weight:700}
 .saved{color:var(--muted);font-size:12px;margin-left:auto;align-self:center}
+
+.truth{gap:10px;flex-wrap:wrap;align-items:center;border-top:1px solid #2a2a2a;padding-top:8px;margin-top:6px}
+.truth .lab{color:#8a8a8a;font-size:12px}
+.truth .cnt{display:inline-flex;align-items:center;gap:4px;color:#8a8a8a;font-size:12px}
+.truth .cnt b{min-width:1.4em;text-align:center;color:#e8e8e8;font-size:14px}
+.truth .cnt b.fix{color:#d8a33a}
+.truth button{min-width:26px;padding:2px 6px}
+.truth .ok.on{border-color:#4a7a4a;color:#8fc98f}
+.truth .undo{color:#7a7a7a}
 .saved.bad{color:#e0736d}
 .card a.shot{display:block;position:relative;aspect-ratio:9/16;background:#000}
 .card a.shot video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .12s}
@@ -522,12 +632,14 @@ input[type=search]{flex:1;min-width:180px}
     <button data-w="all" aria-pressed="false">All</button>
     <button data-w="up" aria-pressed="false">Marked &#9650;</button>
     <button data-w="down" aria-pressed="false">Marked &#9660;</button>
+    <button data-w="new" aria-pressed="false">Not checked</button>
   </div>
   <div class="count" id="count"></div>
 </div>
 
 <div class="grid" id="grid"></div>
 <div class="empty" id="empty" hidden>Nothing here. Try All, or clear the search.</div>
+<div class="empty" id="alldone" hidden>Every clip has been looked at. Run queue-preview.cmd to see how often the counting is right.</div>
 </div>
 
 <script>
@@ -535,9 +647,71 @@ const CLIPS = __DATA__;
 const API = "__API__";          // filled in while KillFeed is running; empty in a synced copy of this file
 const $ = s => document.querySelector(s);
 let where = "Publish";
+// Klipp du har tatt i mens denne sida har vaert aapen. "Not checked" viser det du ikke har sagt noe
+// om enda - men en kjede paa tre kills krever at du trykker + to ganger, og uten dette ville kortet
+// forsvunnet fra lista etter det foerste trykket. De blir liggende til du laster sida paa nytt.
+const touched = new Set();
+const lastDid = {};          // klippnavn -> hva den siste rettelsen foerte til, vist paa kortet
 
 // Marking a clip writes straight back to KillFeed's ledger, so the nightly job sees it: a clip marked
 // down is never uploaded, one marked up goes to the front of the queue.
+function jn(x){ return JSON.stringify(x).replace(/"/g, "&quot;"); }
+
+async function sendTruth(btn, body, apply){
+  const note = btn.closest(".row").querySelector(".saved");
+  if (!API){ note.textContent = "open via Browse clips in the app to save"; note.className = "saved bad"; return; }
+  note.textContent = "saving\u2026"; note.className = "saved";
+  try {
+    const r = await fetch(API + "/truth", {method: "POST", headers: {"Content-Type": "application/json"},
+                                           body: JSON.stringify(body)});
+    if (!r.ok) throw new Error(r.status);
+    let out = {}; try { out = await r.json(); } catch (e) {}
+    touched.add(body.name); apply();
+    // Tallet paa kortet skal flytte seg selv om svaret fra PC-en skulle mangle felt: det er DITT
+    // trykk som er sannheten her, ikke svaret. Serveren kan overstyre etterpaa.
+    {
+      const c = CLIPS.find(x => x.name === body.name);
+      if (c && c.truth){ c.kills = c.truth.kills; c.veh = c.truth.vehicles; }
+      else if (c){ c.kills = c.det_kills; c.veh = c.det_veh; }
+    }
+    if (out.did){
+      // Kortet skal si hva rettelsen GJORDE, ikke bare at den ble lagret. Tittelen og plasseringen
+      // regnes paa PC-en, saa de kommer tilbake i svaret og settes inn her.
+      const c = CLIPS.find(x => x.name === body.name);
+      if (c){
+        if (out.title) c.title = out.title;
+        if (out.where) c.where = out.where;
+        if (out.score !== undefined) c.score = out.score;
+        if (out.kills !== undefined) c.kills = out.kills;
+        if (out.veh !== undefined) c.veh = out.veh;
+      }
+      lastDid[body.name] = out.did;
+    }
+    render();
+  } catch (e) {
+    note.textContent = "could not save \u2013 is KillFeed still running?"; note.className = "saved bad";
+  }
+}
+
+// Tallene starter paa det detektoren trodde. Foerste trykk gjoer dem til dine.
+function bump(btn, name, field, d){
+  const c = CLIPS.find(x => x.name === name);
+  const cur = c.truth ? c.truth : {kills: c.kills, vehicles: c.veh, confirmed: false};
+  const next = Math.max(0, (field === "kills" ? cur.kills : cur.vehicles) + d);
+  const body = {name: name, kills: field === "kills" ? next : cur.kills,
+                vehicles: field === "vehicles" ? next : cur.vehicles};
+  sendTruth(btn, body, () => { c.truth = {kills: body.kills, vehicles: body.vehicles, confirmed: false}; });
+}
+function confirmTruth(btn, name){
+  const c = CLIPS.find(x => x.name === name);
+  sendTruth(btn, {name: name, confirm: true},
+            () => { c.truth = {kills: c.kills, vehicles: c.veh, confirmed: true}; });
+}
+function clearTruth(btn, name){
+  const c = CLIPS.find(x => x.name === name);
+  sendTruth(btn, {name: name, clear: true}, () => { delete c.truth; });
+}
+
 async function rate(btn, name, val){
   const row = btn.closest(".rate"), note = row.querySelector(".saved");
   const clip = CLIPS.find(c => c.name === name);
@@ -548,7 +722,7 @@ async function rate(btn, name, val){
     const r = await fetch(API + "/rate", {method: "POST", headers: {"Content-Type": "application/json"},
                                           body: JSON.stringify({name: name, rating: next})});
     if (!r.ok) throw new Error(r.status);
-    clip.rating = next;
+    clip.rating = next; touched.add(name);
     render();
   } catch (e) {
     note.textContent = "could not save – is KillFeed still running?"; note.className = "saved bad";
@@ -563,6 +737,7 @@ function render(){
   const inSet = c => where === "all" ? true
                    : where === "up" ? c.rating === 1
                    : where === "down" ? c.rating === -1
+                   : where === "new" ? ((!c.truth && !c.rating) || touched.has(c.name))
                    : c.where === where;
   let list = CLIPS.filter(c => inSet(c)
     && (!q || (c.title + " " + c.name).toLowerCase().includes(q)));
@@ -571,14 +746,20 @@ function render(){
     if (x > y) return 1; if (x < y) return -1;
     return a.at < b.at ? 1 : -1;
   });
-  $("#count").textContent = list.length + " clip" + (list.length === 1 ? "" : "s");
-  $("#empty").hidden = list.length > 0;
+  const left = CLIPS.filter(c => !c.truth && !c.rating).length;
+  $("#count").textContent = list.length + " clip" + (list.length === 1 ? "" : "s")
+                          + (where === "new" ? " \u2013 " + left + " to go" : "");
+  $("#empty").hidden = list.length > 0 || (where === "new" && !left);
+  $("#alldone").hidden = !(where === "new" && !left && !list.length);
   $("#grid").innerHTML = list.map(card).join("");
   wireHover();
 }
 
 function card(c){
   const shot = c.img ? `<img loading="lazy" src="${c.img}" alt="">` : `<div class="noimg">no preview</div>`;
+  // Staar det noe annet her enn det du sa, skal det vaere synlig HVA maskinen trodde.
+  const det = c.truth && (c.truth.kills !== c.det_kills || c.truth.vehicles !== c.det_veh)
+            ? `the detector said ${c.det_kills}k / ${c.det_veh} veh` : "";
   const bits = [];
   if (c.kills) bits.push(`<span><b>${c.kills}</b> kill${c.kills > 1 ? "s" : ""}</span>`);
   if (c.veh) bits.push(`<span><b>${c.veh}</b> vehicle${c.veh > 1 ? "s" : ""}</span>`);
@@ -594,6 +775,19 @@ function card(c){
     <div class="meta">
       <div class="t">${esc(c.title)}</div>
       <div class="nums">${bits.join("")}</div>
+      <div class="row truth" data-n="${esc(c.name)}">
+        <span class="lab">What happened</span>
+        <span class="cnt"><button onclick="bump(this,${jn(c.name)},'kills',-1)">&minus;</button>
+          <b class="${c.truth && c.truth.kills !== c.det_kills ? 'fix' : ''}">${c.kills}</b>
+          <button onclick="bump(this,${jn(c.name)},'kills',1)">+</button> kills</span>
+        <span class="cnt"><button onclick="bump(this,${jn(c.name)},'vehicles',-1)">&minus;</button>
+          <b class="${c.truth && c.truth.vehicles !== c.det_veh ? 'fix' : ''}">${c.veh}</b>
+          <button onclick="bump(this,${jn(c.name)},'vehicles',1)">+</button> vehicles</span>
+        <button class="ok ${c.truth && c.truth.confirmed ? 'on' : ''}" onclick="confirmTruth(this,${jn(c.name)})"
+                title="The numbers above are right">&#10003; correct</button>
+        <button class="undo" onclick="clearTruth(this,${jn(c.name)})" title="Not checked yet">undo</button>
+        <span class="saved">${lastDid[c.name] ? esc(lastDid[c.name]) : (det ? esc(det) : "")}</span>
+      </div>
       <div class="row rate">
         <button title="Worth posting" aria-pressed="${c.rating === 1}" onclick="rate(this, ${JSON.stringify(c.name).replace(/"/g, "&quot;")}, 1)">&#9650;</button>
         <button title="Never post this" aria-pressed="${c.rating === -1}" onclick="rate(this, ${JSON.stringify(c.name).replace(/"/g, "&quot;")}, -1)">&#9660;</button>
@@ -655,6 +849,10 @@ $("#q").addEventListener("input", render);
 $("#sort").addEventListener("change", render);
 $("#where").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
+  // Klipp du har tatt i blir liggende i "Not checked" mens du jobber med dem, ellers forsvinner
+  // kortet under fingeren etter foerste trykk. Men bytter du visning, er du ferdig med dem: da
+  // skal lista vise det som FAKTISK ikke er sett paa, ikke det du nettopp svarte paa.
+  if (b.dataset.w !== where) touched.clear();
   where = b.dataset.w;
   [...$("#where").children].forEach(x => x.setAttribute("aria-pressed", x === b));
   render();
@@ -665,34 +863,76 @@ render();
 </html>
 """
 
+def _move_clip(c, want, s, log=log):
+    """Flytt ett klipp mellom Publish\\ og Other\\ slik at mappa stemmer med statusen.
+    Returnerer True hvis noe ble flyttet."""
+    if c.get("status") == want: return False
+    dst_dir = os.path.join(s["output_dir"], "Publish" if want == "publiser" else "Other")
+    src = c.get("path") or ""
+    if not src or not os.path.exists(src):
+        c["status"] = want; return False                 # fila er alt borte - rett bare hovedboka
+    try:
+        os.makedirs(dst_dir, exist_ok=True)
+        dst = os.path.join(dst_dir, os.path.basename(src))
+        shutil.move(src, dst)
+        for ext in (".txt", ".json"):
+            t = os.path.splitext(src)[0] + ext
+            if os.path.exists(t): shutil.move(t, os.path.splitext(dst)[0] + ext)
+        c["path"] = dst; c["status"] = want
+        return True
+    except OSError as e:
+        log(f"  could not move {os.path.basename(src)}: {e}"); return False
+
+def apply_truth(s, L, name, killclip, log=log):
+    """Etter at du har sagt hva som skjedde: skriv tittel og poeng om, og flytt klippet om regelen
+    naa gir et annet svar. Returnerer en setning i klartekst om hva som ble gjort - den er svaret
+    paa "hvordan vet jeg at rettelsen min virker"."""
+    c = (L.get("clips") or {}).get(name)
+    if not c: return {"did": "clip not found"}
+    k, v, human = counts_of(c, killclip)
+    dist = c.get("max_dist_m") or 0
+    length = round(float(c.get("len") or 0), 1)
+    title = killclip.auto_title(k, 0, v, 0, None, dist)
+    score = killclip.clip_score(k, v, dist, length)
+    before_title, before_status = c.get("title"), c.get("status")
+    c["title"], c["score"] = title, score
+    want = "publiser" if qualifies(c, s["shorts"]) else "andre"
+    moved = _move_clip(c, want, s, log) if c.get("status") in ("publiser", "andre") else False
+    # tittelen ligger ogsaa i sidecar-txt-en ved klippet, som nattjobben og du selv leser
+    try:
+        t = os.path.splitext(c.get("path") or "")[0] + ".txt"
+        if t and os.path.exists(t):
+            lines = open(t, encoding="utf-8").read().split("\n")
+            if lines and lines[0].strip() != title:
+                lines[0] = title; open(t, "w", encoding="utf-8").write("\n".join(lines))
+    except OSError: pass
+    save_ledger(L)
+    bits = []
+    if title != before_title: bits.append(f"title is now \u201c{title}\u201d")
+    if want != before_status:
+        bits.append("moved to Publish" if want == "publiser" else "moved to Other")
+    elif moved: bits.append("file put back where it belongs")
+    if not bits: bits.append("nothing changed \u2013 the queue already agreed with you" if human
+                             else "back to the detector\u2019s own count")
+    msg = ", ".join(bits)
+    log(f"  {name}: {msg}")
+    return {"did": msg, "title": title, "score": score, "kills": k, "veh": v,
+            "where": "Publish" if want == "publiser" else "Other"}
+
 def resort_clips(s, L, log=log):
     """Re-apply the Publish/Other rule to clips we already have, moving the files to match.
     Used when the rule itself changes, so a stricter setting cleans up the existing queue
     instead of only applying to whatever gets clipped next. Returns (to_publish, to_other)."""
     sh = s["shorts"]
-    out_pub = os.path.join(s["output_dir"], "Publish"); out_andre = os.path.join(s["output_dir"], "Other")
     moved_pub = moved_other = 0
     for name, c in L.get("clips", {}).items():
         if c.get("status") not in ("publiser", "andre"): continue
         if c.get("fallback"): continue                      # the queue-is-empty pick stays where it is
         want = "publiser" if qualifies(c, sh) else "andre"
         if want == c["status"]: continue
-        src = c.get("path") or ""
-        dst_dir = out_pub if want == "publiser" else out_andre
-        if not src or not os.path.exists(src):
-            c["status"] = want; continue                    # file already gone - just fix the ledger
-        try:
-            os.makedirs(dst_dir, exist_ok=True)
-            dst = os.path.join(dst_dir, os.path.basename(src))
-            shutil.move(src, dst)
-            for ext in (".txt", ".json"):
-                t = os.path.splitext(src)[0] + ext
-                if os.path.exists(t): shutil.move(t, os.path.splitext(dst)[0] + ext)
-            c["path"] = dst; c["status"] = want
+        if _move_clip(c, want, s, log):
             if want == "publiser": moved_pub += 1
             else: moved_other += 1
-        except OSError as e:
-            log(f"  could not move {name}: {e}")
     if moved_pub or moved_other:
         save_ledger(L)
         log(f"Re-sorted with the current rule: {moved_pub} to Publish, {moved_other} to Other.")
@@ -1029,8 +1269,10 @@ def why_text(row, s):
     parts = [f"{k} kill{'s' if k != 1 else ''}" + (f", {v} vehicle{'s' if v != 1 else ''} destroyed" if v else "")]
     if row["dist"]: parts.append(f"longest {row['dist']} m")
     if row["victims"]: parts.append("victims: " + ", ".join(row["victims"]))
-    rule = (f"Publish needs {sh['min_kills']}+ kills within {sh.get('max_kill_span', 10)} s of each other, "
-            f"or {sh['min_vehicles']}+ vehicle kill.")
+    p = sh.get("publish") or {}
+    rule = (f"Publish needs two kills within {p.get('double_s', 3):g} s of each other, or "
+            f"{p.get('pace_need', 3)} within {p.get('pace_s', 5) * (p.get('pace_need', 3) - 1):g} s"
+            + (", or a vehicle kill." if p.get("vehicle_qualifies") else "."))
     if row["where"] == "Publish":
         verdict = "Fallback: best single kill of a session that had no multikill." if row["fallback"] else "Met the rule."
     else:

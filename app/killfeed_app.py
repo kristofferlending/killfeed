@@ -343,7 +343,13 @@ class Wizard(tk.Toplevel):
         s["make_shorts"] = self.v_shorts.get()
         m["enabled"] = self.v_recap.get(); m["auto"] = self.v_rauto.get() == "auto"
         m["min_minutes"] = max(1, self.v_rmin.get()); m["max_minutes"] = max(m["min_minutes"], self.v_rmax.get())
-        sh["min_kills"], sh["min_vehicles"] = {"multi_or_veh": (2, 1), "all": (1, 1), "multi_only": (2, 99)}[self.v_rule.get()]
+        # De tre valgene skriver tersklene i shorts.publish. min_kills/min_vehicles beholdes bare
+        # fordi wizarden og eldre settings-filer har dem - det er publish som avgjoer.
+        _r = self.v_rule.get()
+        sh["min_kills"], sh["min_vehicles"] = {"multi_or_veh": (2, 1), "all": (1, 1), "multi_only": (2, 99)}[_r]
+        sh.setdefault("publish", {})
+        sh["publish"]["vehicle_qualifies"] = (_r == "multi_or_veh")
+        sh["publish"]["double_s"] = 8.0 if _r == "all" else sh["publish"].get("double_s", 3.0) or 3.0
         sh["fallback_single_when_empty"] = self.v_fallback.get()
         s["autostart"] = self.v_auto.get(); s["setup_done"] = True
         try: os.makedirs(s["output_dir"], exist_ok=True)
@@ -352,6 +358,9 @@ class Wizard(tk.Toplevel):
         C.save_settings(s); self.ok = True; self.destroy()
 
 # ------------------------------------------------------------------ main window
+class _SkipRound(Exception):
+    """Spillvakten fikk ikke svar fra tasklist - hopp over denne runden."""
+
 class App(tk.Tk):
     instance = None
 
@@ -363,6 +372,8 @@ class App(tk.Tk):
         self.title(f"{APP} {VERSION}"); self.geometry("940x720"); self.minsize(800, 560)
         self.s = C.load_settings(); self.L = C.load_ledger()
         self.icon = None; self.icons = None; self.busy = False; self.paused = False; self.stop_flag = False; self.stop_req = False
+        self._dormant = False   # spillet kjoerer: vinduet er gjemt og oppdateringsloekka sover
+        self._hid_for_game = False   # DU hadde vinduet oppe, og DVALEN gjemte det - da skal det tilbake
         self.lines = []; self._tray_state = None; self._spin_i = 0; self._stats_dirty = True; self._stop_clicks = 0; self._pending_action = None
         C.add_log_hook(self._log_hook)
         C.clean_work(); C.rotate_logs()
@@ -382,6 +393,7 @@ class App(tk.Tk):
         self._start_clip_server()   # before any run, so the page written at the end of one can save marks
         if not start_hidden: self.show()
         threading.Thread(target=self._watch_loop, daemon=True).start()
+        threading.Thread(target=self._game_guard_loop, daemon=True).start()
         self.after(300, self._pump)
 
     # ================================================================ GUI
@@ -567,9 +579,6 @@ class App(tk.Tk):
                  "Measured over six sessions, 76 % of every clip cut was a single kill with nothing near it. "
                  "None of them can reach Publish anyway, so they only cost clipping time and disk. A kill and "
                  "the vehicle it destroyed count as one moment together, so those are kept."),
-                ("Kills must be within N s of each other", ("shorts", "max_kill_span"),
-                 "A burst is what people watch. Two kills 25 s apart make a long short where nothing happens in between, "
-                 "so those go to Other instead. A vehicle kill always counts on its own."),
             ]),
             ("Recap", [
                 ("Seconds before each kill", ("montage", "pre"), None),
@@ -701,7 +710,8 @@ class App(tk.Tk):
     def _rule_signature(self):
         """What decides Publish vs Other. Changing this re-sorts the clips we already have."""
         sh = self.s["shorts"]
-        return (sh.get("min_kills"), sh.get("min_vehicles"), sh.get("max_kill_span", 10))
+        p = sh.get("publish") or {}
+        return (p.get("double_s"), p.get("pace_s"), p.get("pace_need"), p.get("vehicle_qualifies"))
 
     def _sig(self):
         return tuple(self._get(k) for k in sorted(C.CLIP_KEYS))
@@ -837,6 +847,13 @@ class App(tk.Tk):
     def log(self, msg): C.log(msg)
 
     def _pump(self):
+        # Spillet kjoerer: ingenting tegnes, ingenting regnes ut. Et synlig vindu over et
+        # fullskjermspill tvinger Windows til aa komponere skrivebordet i stedet for aa la spillet
+        # kjoere eksklusivt, og en loekke som tegner tre ganger i sekundet holder den komposisjonen
+        # i gang. Det kostet bilder selv med klippingen stoppet. Her gjoer vi ingenting i det hele
+        # tatt, og ser etter igjen hvert annet sekund.
+        if self._dormant:
+            return self.after(2000, self._pump)
         if self.busy:
             self._spin_i = (self._spin_i + 1) % 4; self.v_spin.set("◐◓◑◒"[self._spin_i])
             self.v_primary.set("■   Stop after this file" if not self.stop_req else ("■   Stop now" if not killclip.ABORT else "Stopping…"))
@@ -967,7 +984,9 @@ class App(tk.Tk):
                     return self._send_clip(full, ct)
                 return self._send(404, b"not found")
             def do_POST(self):
-                if urllib.parse.urlparse(self.path).path != "/rate":
+                _p = urllib.parse.urlparse(self.path).path
+                if _p == "/truth": return self._truth()
+                if _p != "/rate":
                     return self._send(404, b"not found")
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
@@ -981,6 +1000,47 @@ class App(tk.Tk):
                 if not ok: return self._send(404, b"unknown clip")
                 app.after(0, lambda: app.log(f"Marked {name}: {'keep' if rating > 0 else ('never post' if rating < 0 else 'undecided')}"))
                 return self._send(200, b'{"ok":true}', "application/json")
+
+            def _truth(self):
+                """Fasit fra et menneske som har sett klippet: hva skjedde faktisk.
+
+                Det er dette som gjoer at treffsikkerheten kan MAALES i stedet for resonneres fram.
+                Samme sperrer som /rate: bare loopback, liten kropp, ukjent klipp gir 404."""
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    if n > 4096: return self._send(413, b"too big")
+                    d = _json.loads(self.rfile.read(n) or b"{}")
+                    name = str(d.get("name") or "")
+                    if d.get("clear"):
+                        kills = veh = None; confirm = None
+                    elif d.get("confirm"):
+                        kills = veh = None; confirm = True
+                    else:
+                        kills = None if d.get("kills") is None else int(d["kills"])
+                        veh = None if d.get("vehicles") is None else int(d["vehicles"])
+                        confirm = None
+                except Exception:
+                    return self._send(400, b"bad request")
+                if not name: return self._send(400, b"no clip named")
+                if not C.set_truth(app.L, name, kills, veh, confirm):
+                    return self._send(404, b"unknown clip")
+                what = ("not checked" if (kills is None and veh is None and not confirm)
+                        else "counts are right" if confirm else f"{kills} kills, {veh} vehicles")
+                app.after(0, lambda: app.log(f"You said about {name}: {what}"))
+                # Og saa gjoer vi noe med det: tittel, poeng og plassering settes etter DITT tall.
+                # Svaret sendes tilbake til sida, saa kortet kan si hva rettelsen foerte til i stedet
+                # for bare "saved" - det var umulig aa se at merkingen hadde noen virkning.
+                try:
+                    did = C.apply_truth(app.s, app.L, name, killclip, log=lambda m: None)
+                except Exception as e:
+                    did = {"did": f"saved, but could not re-sort: {e}"}
+                # apply_truth gir en ordbok med did/title/score/kills/veh/where, og de skal ligge
+                # FLATT i svaret - sida leser out.kills og out.title direkte. Pakket inn under "did"
+                # ble de usynlige for sida, og da sto tallet stille paa kortet selv om hvert trykk
+                # ble lagret: sytten trykk, sytten lagringer, ingen bevegelse paa skjermen.
+                out = {"ok": True}
+                out.update(did if isinstance(did, dict) else {"did": str(did)})
+                return self._send(200, _json.dumps(out).encode("utf-8"), "application/json")
         # A fixed port first: clips.html has the address baked into it, so a page written yesterday (or by
         # a run that finished overnight) only keeps working if we land on the same port again. Fall back to
         # whatever is free if something else has taken it.
@@ -1080,12 +1140,86 @@ class App(tk.Tk):
         finally: os._exit(0)
 
     # ================================================================ work
+    def _game_guard_loop(self):
+        """Spillet vinner alltid, ogsaa midt i en kjoering.
+
+        pause_while_game_running stoppet bare NYE kjoeringer. En kjoering som alt var i gang klippet
+        videre mens spillet hakket og innputs hang - og paa en harddisk er det ikke CPU-en som gjoer
+        vondt, det er kjoen til disken spillet streamer fra. Her avbrytes fila med en gang spillet
+        dukker opp. Den er da ikke ferdig og blir ikke ført i hovedboka, saa den klippes helt om
+        neste gang: vi mister noen minutters arbeid, aldri et klipp.
+
+        Egen traad fordi tasklist tar et par hundre millisekunder, og det skal ikke skje i GUI-traaden."""
+        held = False; gone = 0
+        while not self.stop_flag:
+            try:
+                on = C.game_running(self.s.get("game_process_hint", "wardogs"))
+                if on is None:
+                    raise _SkipRound()          # vet ikke - gjoer ingenting, spoer igjen om fem sekunder
+                # Vaakne krever to "nei" paa rad (ti sekunder). Ett enkelt feilaktig svar fra tasklist
+                # skal aldri kunne vekke appen mens du spiller.
+                gone = 0 if on else gone + 1
+                if C.should_hold_for_game(self.s, self.busy, on, held):
+                    held = True
+                    self.stop_req = True; killclip.ABORT = True
+                    for pr in list(getattr(killclip, "_procs", [])):
+                        try: pr.kill()
+                        except Exception: pass
+                    self.log("Game detected - clipping stopped at once. It picks up when you close the game.")
+                if on and not self._dormant:
+                    self.after(0, self._sleep_for_game)
+                elif not on:
+                    held = False
+                    if self._dormant and gone >= 2: self.after(0, self._wake_after_game)
+            except _SkipRound:
+                pass
+            except Exception as e:
+                self.log(f"ERROR in game guard: {e}")
+            for _ in range(5):
+                if self.stop_flag: return
+                time.sleep(1)
+
+    def _sleep_for_game(self):
+        """Gaa helt i dvale mens spillet kjoerer: gjem vinduet og la tegneloekka sove.
+
+        Aa stoppe klippingen holdt ikke. Vinduet og _pump kostet bilder for seg selv, og det er
+        ikke rart: tre oppdateringer i sekundet av et vindu som ligger over et fullskjermspill
+        holder skrivebordskomposisjonen i gang og tar spillet ut av eksklusiv fullskjerm."""
+        if self._dormant: return
+        self._dormant = True
+        self._hid_for_game = False
+        try:
+            # Bare gjem hvis vi har en vei tilbake - ellers blir appen borte. Og husk at det var VI
+            # som gjemte det: hadde du alt lagt det i kurven selv, skal det ligge der etterpaa.
+            if self.icon and self.state() == "normal":
+                self._hid_for_game = True; self.withdraw()
+        except Exception: pass
+        self.status("Game is running - KillFeed is asleep.", "Nothing is clipped or drawn until you close it.")
+        self.log("Game detected - window hidden and the interface put to sleep.")
+
+    def _wake_after_game(self):
+        """Spillet er borte: vaakne, men ikke sprett opp foran brukeren."""
+        if not self._dormant: return
+        self._dormant = False
+        if self._hid_for_game:
+            # Tilbake dit du hadde det. Uten dette ble vinduet borte fra oppgavelinja for godt, og
+            # det eneste sporet av appen var et ikon Windows 11 gjemmer under ^ ved klokka. WARDOGS
+            # ligger noen sekunder i prosesslista etter at du lukker det, saa det var nok aa starte
+            # KillFeed rett etter en oekt: ett femsekunders sveip, og vinduet forsvant.
+            self._hid_for_game = False
+            # iconify, ikke deiconify: vinduet kommer tilbake i oppgavelinja minimert. deiconify kan
+            # aktivere vinduet paa Windows, og et vindu som aktiveres tar fokus fra et spill.
+            try: self.iconify()
+            except Exception: pass
+        self.status("Watching for new recordings.", self.s["input_dir"])
+        self.log("Game closed - KillFeed is awake again.")
+
     def _watch_loop(self):
         time.sleep(3)
         while not self.stop_flag:
             try:
                 if not self.paused and not self.busy:
-                    if self.s.get("pause_while_game_running", True) and C.game_running(self.s.get("game_process_hint", "wardogs")):
+                    if self.s.get("pause_while_game_running", True) and C.game_running(self.s.get("game_process_hint", "wardogs")) is not False:
                         self.status("WARDOGS is running – waiting.", "Clipping starts when you close the game.")
                     elif C.ready_sources(self.s, self.L):
                         self._do_run()
@@ -1146,6 +1280,14 @@ class App(tk.Tk):
 
     def _do_run(self):
         self.busy = True; self.stop_req = False; killclip.ABORT = False; self._stop_clicks = 0
+        cpu = self.s.get("cpu", {}) or {}
+        killclip.WORKERS = cpu.get("workers", 0) or 0
+        killclip.HWACCEL = (cpu.get("hwaccel", "") or "").strip()
+        cores = cpu.get("worker_cores", "")
+        mask = killclip.parse_cores(cores)
+        if mask and killclip.set_affinity(mask):
+            n = bin(mask).count("1")
+            self.log(f"Clipping is pinned to {n} logical CPU(s): {cores}")
         try:
             probs = C.preflight(self.s, killclip)
             if probs:
@@ -1173,6 +1315,7 @@ class App(tk.Tk):
         except Exception as e:
             self.log(f"ERROR: {e}"); self.status("Something went wrong.", f"{e} – see the Log tab, or press Send feedback.")
         finally:
+            if mask: killclip.set_affinity(0)       # tilbake til alle kjerner naar vi er ferdige
             self.busy = False; self.stop_req = False; self._stats_dirty = True
 
     def feedback(self):

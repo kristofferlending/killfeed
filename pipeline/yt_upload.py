@@ -74,8 +74,14 @@ def meta_for(path, cfg, L):
         if veh: bits.append(f"{veh} vehicle{'s' if veh>1 else ''} destroyed")
         title = cfg.get("title_prefix", "WARDOGS Little Bird") + (" – " + ", ".join(bits) if bits else "") + (f" ({when})" if when else "")
     title = re.sub(r"\s*\(\+\$[\d,]+\)", "", title).replace(" #shorts", "").strip()   # money = OCR noise, never in a title
-    series = (cfg.get("series_tag") or "").strip()          # e.g. "Road to Havoc": a running hook across shorts and recaps
-    if series and len(title) + len(series) + 12 <= 100: title = f"{title} | {series}"
+    series = (cfg.get("series_tag") or "").strip()          # a running hook across shorts and recaps
+    if series:
+        # Merkelappen staar fast; blir det for langt, er det TALLENE som kortes. Foer ble merkelappen
+        # droppet i stillhet naar tittelen var lang - altsaa paa klippene med flest kills og
+        # kjoeretoey, som er de beste - saa de eneste shortsene uten kanalnavnet var de beste.
+        room = 100 - len(" | ") - len(series) - len(" #shorts")
+        if len(title) > room: title = title[:max(0, room)].rstrip(" ,-\u2013")
+        title = f"{title} | {series}"
     title = (title + " #shorts")[:100]
     desc = m.get("description") or cfg.get("description", "")
     if series: desc = f"{series} – " + desc
