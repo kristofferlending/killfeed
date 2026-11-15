@@ -283,6 +283,23 @@ def probe(path):
 def duration(path):
     return probe(path)[0]
 
+def _frame_no(p):
+    m = re.search(r"_(\d+)\.png$", p)
+    return int(m.group(1)) if m else -1
+
+def _frames_in_order(tmp, zone):
+    """Bildene i riktig rekkefoelge - sortert paa tallet, ikke paa teksten.
+
+    Bildenummeret ER tidspunktet (nr. n = (n-1)/fps sekunder), saa rekkefoelgen maa vaere eksakt.
+    Mangler et nummer, eller er de ikke 1..N, stopper vi heller enn aa gi hvert kill feil tid:
+    en fil med feil gir ingen klipp og blir aldri slettet, et forskjoevet klipp blir publisert."""
+    frames = sorted(glob.glob(os.path.join(tmp, f"z{zone}_*.png")), key=_frame_no)
+    nums = [_frame_no(f) for f in frames]
+    if nums and nums != list(range(1, len(nums) + 1)):
+        raise RuntimeError(f"frame numbering is broken in zone {zone} ({len(nums)} frames, "
+                           f"first {nums[:3]}, last {nums[-3:]}) - refusing to guess the timeline")
+    return frames
+
 def detect(path, fps, w=None, h=None):
     if w is None: _, w, h = probe(path)
     rois = rois_for(w, h)
@@ -295,11 +312,15 @@ def detect(path, fps, w=None, h=None):
         # bildene ned til vanlig minne etterpaa, saa filterkjeden under virker uendret.
         cmd = [FFMPEG,"-v","error"] + (["-hwaccel",HWACCEL] if HWACCEL else []) + ["-i",path,"-filter_complex",fc]
         for i in range(len(rois)):
-            cmd += ["-map",f"[o{i}]","-fps_mode","passthrough",os.path.join(tmp,f"z{i}_%05d.png")]
+            # %08d, ikke %05d. Med fem sifre ble bilde nr. 100 000 og oppover (13,9 timer ved 2 fps)
+            # 6-sifret, og sorted() sorterer tekst: z0_100000.png havner mellom z0_10000 og z0_10001.
+            # Da fikk hvert bilde etter 1,4 timer feil tidspunkt, og klippene ble skaaret ut paa
+            # feil sted - et tomt rom i stedet for killet. Skjedde i tre opptak paa 15-20 timer.
+            cmd += ["-map",f"[o{i}]","-fps_mode","passthrough",os.path.join(tmp,f"z{i}_%08d.png")]
         _run_ffmpeg(cmd)
         texts = {}
         for i in range(len(rois)):
-            frames = sorted(glob.glob(os.path.join(tmp,f"z{i}_*.png")))
+            frames = _frames_in_order(tmp, i)
             batches = [frames[j:j+OCR_BATCH] for j in range(0, len(frames), OCR_BATCH)]
             with ThreadPoolExecutor(workers()) as ex:
                 texts[i] = [t for part in ex.map(_ocr_batch, batches) for t in part]
@@ -633,7 +654,7 @@ def _run(A, log=print):
     # hva killet var verdt. Uten raatallene kan ingen regne om tellingen etterpaa, og uten pengeteller-
     # en oeverst til hoeyre (`money`, som ble lest og kastet) finnes ingen uavhengig kontroll. Begge
     # koster noen kilobyte i rapporten og sparer en omskanning paa timer hver gang regelen skal proeves.
-    report={"input":A.inp,"duration":dur,"width":W,"height":H,"hits":[(t,k) for t,k in hits],
+    report={"input":A.inp,"duration":dur,"width":W,"height":H,"timeline":2,"fps":A.fps,"hits":[(t,k) for t,k in hits],
             "reward":[(t,a) for t,a in (getattr(detect,"reward",None) or [])],
             "reward_raw":[(t,a) for t,a in (getattr(detect,"reward_raw",None) or [])],
             "money":[(t,a) for t,a in cash],

@@ -42,6 +42,15 @@ def main():
         except Exception as e:
             log(f"  ERROR clipping: {e}"); problems.append(f"Clipping failed: {str(e)[:100]}")
 
+    # ---- foer opplasting: klipp skaaret ut paa feil sted skal aldri kunne lastes opp ----
+    # Opplasteren tar det som ligger i Publish-mappa. Kjoerer appen, lagres ikke hovedboka her
+    # (appen ville skrevet over den) - filene flyttes uansett, og appen merker dem selv ved oppstart.
+    try:
+        n = C.quarantine_scrambled(s, L, B.killclip, log=lambda m: log("  " + m), save=not B.app_running())
+        if n: log(f"Moved {n} wrong-place clip(s) out of the queue before uploading.")
+    except Exception as e:
+        log(f"  ERROR moving wrong-place clips: {e}"); problems.append(f"Could not move wrong-place clips: {str(e)[:80]}")
+
     # ---- step 2: upload ----
     if not A.no_upload:
         log("Step 2/3: uploading to YouTube (shorts from Publish, recaps from Recaps) ...")

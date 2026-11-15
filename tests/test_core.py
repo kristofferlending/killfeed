@@ -549,6 +549,30 @@ assert 'C.apply_rule_choice(s["shorts"], self.v_rule.get())' in _appsrc, "Settin
 assert 'C.rule_choice(s["shorts"])' in _appsrc, "Settings maa vise regelen som faktisk gjelder"
 print("publish-valg: Settings viser og skriver samme regel som koen bruker")
 
+# Lange opptak: bildenumrene ER tidslinja. Med %05d ble bilde 100 000 og oppover sortert som tekst
+# inn mellom 10000 og 10001, og hvert kill etter 1,4 timer fikk feil tid - klippene ble skaaret ut
+# av et tomt rom. Rammene her er tomme filer; det er navnene og rekkefoelgen som testes.
+import tempfile as _tf2
+_fd = _tf2.mkdtemp()
+for _n in range(1, 100011):
+    open(os.path.join(_fd, f"z0_{_n:08d}.png"), "wb").close()
+_fr = killclip._frames_in_order(_fd, 0)
+assert [killclip._frame_no(f) for f in _fr[9998:10003]] == [9999, 10000, 10001, 10002, 10003]
+assert killclip._frame_no(_fr[-1]) == 100010 and len(_fr) == 100010
+os.remove(os.path.join(_fd, "z0_00050000.png"))                  # et hull i rekka
+try:
+    killclip._frames_in_order(_fd, 0); raise AssertionError("et hull i bildenumrene skulle stoppet kjoeringen")
+except RuntimeError: pass
+shutil.rmtree(_fd, ignore_errors=True)
+assert "%08d" in open(killclip.__file__, encoding="utf-8").read(), "bildenavnene maa ha plass til lange opptak"
+print("lange opptak: bildene i riktig rekkefoelge forbi 99 999, og hull stopper kjoeringen")
+
+# Klipp fra stokkede rapporter flyttes ut av koen - aldri fra nye rapporter, aldri fra korte opptak
+assert C._scrambled({"duration": 70000}, 2) == 4999.5
+assert C._scrambled({"duration": 70000, "timeline": 2}, 2) is None
+assert C._scrambled({"duration": 40000}, 2) is None
+print("feil sted: bare gamle rapporter fra opptak over 13,9 t regnes som stokket")
+
 # Nattjobben: aldri et vindu som tar fokus, aldri under spill, og tom ko er ikke en feil.
 # En MessageBox herfra tabbet ut et spill 08.11.2026 og kostet en runde.
 import tempfile as _tf, types as _ty, importlib.util as _iu

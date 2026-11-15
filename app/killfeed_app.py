@@ -373,6 +373,8 @@ class App(tk.Tk):
         self.lines = []; self._tray_state = None; self._spin_i = 0; self._stats_dirty = True; self._stop_clicks = 0; self._pending_action = None
         C.add_log_hook(self._log_hook)
         C.clean_work(); C.rotate_logs()
+        try: C.quarantine_scrambled(self.s, self.L, killclip)     # klipp fra feil sted (bygg foer 0.5.1)
+        except Exception as e: C.log(f"ERROR moving wrong-place clips: {e}")
         if not self.s.get("setup_done"):
             w = Wizard(self, self.s); self.wait_window(w)
             if not w.ok: self.destroy(); return

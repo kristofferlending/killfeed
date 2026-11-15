@@ -15,7 +15,7 @@ Ingen opplasting her. Brukeren publiserer fra synkmappa (YouTube-appen på telef
 import os, sys, re, json, glob, time, shutil, tempfile, subprocess, datetime
 
 APP = "KillFeed"
-VERSION = "0.5-alpha"
+VERSION = "0.5.1-alpha"
 CF = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # ------------------------------------------------------------------ stier
@@ -388,6 +388,76 @@ def apply_rule_choice(sh, choice):
     p["vehicle_qualifies"] = (choice == "multi_or_veh")
     if choice == "all": p["double_s"] = 8.0
     elif float(p.get("double_s", 3.0) or 3.0) >= 8: p["double_s"] = 3.0
+
+WRONG_PLACE = "_wrong-place"     # under Other\\ - klipp som ble skaaret ut paa feil sted i opptaket
+
+def _scrambled(rep, fps):
+    """Ble tidslinjen i denne rapporten stokket? Gjelder rapporter fra foer 0.5.1 (uten "timeline")
+    for opptak med flere enn 99 999 bilder, fra bilde 10 000 og utover."""
+    if not rep or rep.get("timeline", 1) >= 2: return None
+    f = float(rep.get("fps") or fps or 2)
+    if float(rep.get("duration") or 0) * f <= 99999: return None
+    return (10000 - 1) / f          # sekunder: alt etter dette fikk feil tidspunkt
+
+def quarantine_scrambled(s, L, killclip, log=log, save=True):
+    """Flytt klipp som ble skaaret ut paa feil sted til Other\\_wrong-place\\ og ta dem ut av koen.
+
+    Opptak paa over 13,9 timer (2 fps) fikk stokket tidslinje i alle bygg foer 0.5.1, se killclip.
+    Klippene derfra viser et tomt rom eller noe tilfeldig i stedet for killet - de kan ikke rettes,
+    for opptakene er slettet. De slettes ikke her heller: de flyttes, saa du kan se dem selv.
+    Returnerer antall klipp som ble flyttet."""
+    out = s.get("output_dir") or ""
+    if not out: return 0
+    dest = os.path.join(out, "Other", WRONG_PLACE)
+    fps = (s.get("shorts") or {}).get("fps", 2)
+    cache, moved = {}, 0
+    def report(base):
+        if base not in cache:
+            cache[base] = jload(os.path.join(REPORTS, base + "-auto.json"), None)
+        return cache[base]
+    def move(path):
+        if not path: return path
+        if not os.path.exists(path):                      # nattjobben kan ha flyttet den allerede
+            there = os.path.join(dest, os.path.basename(path))
+            return there if os.path.exists(there) else path
+        os.makedirs(dest, exist_ok=True)
+        new = os.path.join(dest, os.path.basename(path))
+        shutil.move(path, new)
+        t = os.path.splitext(path)[0] + ".txt"
+        if os.path.exists(t): shutil.move(t, os.path.splitext(new)[0] + ".txt")
+        return new
+    for name, c in (L.get("clips") or {}).items():
+        if c.get("status") not in ("publiser", "andre"): continue
+        m = re.match(r"^(.+)-auto\d+-([\d.]+)-([\d.]+)\.mp4$", name)
+        if not m: continue
+        limit = _scrambled(report(m.group(1)), fps)
+        if limit is None or float(m.group(3)) <= limit: continue
+        try:
+            c["path"] = move(c.get("path"))
+        except OSError as e:
+            log(f"  could not move {name}: {e}"); continue
+        c["was"] = c.get("status"); c["status"] = "broken"
+        c["broken"] = "cut from the wrong place in a recording over 13.9 hours (fixed in 0.5.1)"
+        moved += 1
+    # recap-banken ble skaaret med samme gale tider
+    for base, rep in list(cache.items()):
+        limit = _scrambled(rep, fps)
+        if limit is None or not rep.get("bank"): continue
+        try: t0 = killclip.file_start_epoch(rep.get("input") or base, float(rep["duration"]))
+        except Exception: continue
+        keep = []
+        for seg in rep["bank"]:
+            if float(seg.get("abs", 0)) - t0 + float(seg.get("len", 0)) > limit:
+                try: move(seg.get("file"))
+                except OSError: pass
+            else: keep.append(seg)
+        if len(keep) != len(rep["bank"]):
+            rep["bank"] = keep; jsave(os.path.join(REPORTS, base + "-auto.json"), rep)
+    if moved:
+        log(f"Moved {moved} clip(s) to Other\\{WRONG_PLACE}\\: they were cut from the wrong place in a "
+            f"recording longer than 13.9 hours (a bug fixed in 0.5.1). Nothing was deleted.")
+        if save: save_ledger(L)
+    return moved
 
 def counts_of(c, killclip):
     """Hva klippet inneholder: DITT svar hvis du har sett det, ellers detektorens telling.
